@@ -47,6 +47,8 @@ import {
   BotiquinConfig,
   BotiquinState,
   calcularDiasVencimiento,
+  calcularStockMinimoPorDefecto,
+  esProductoConsideradoEsencial,
   CATEGORIAS_MEDICAMENTOS,
   esMedicamentoProximoAVencer,
   esMedicamentoVencido,
@@ -149,6 +151,7 @@ export default function BotiquinAppClient({
   const [aiDetectedFields, setAiDetectedFields] = useState<string[]>([])
   const [aiMissingFields, setAiMissingFields] = useState<CampoFaltanteIA[]>([])
   const [aiHybridMessage, setAiHybridMessage] = useState<string>('')
+  const [stockMinimoTouched, setStockMinimoTouched] = useState<boolean>(false)
 
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
   const galleryInputRef = useRef<HTMLInputElement | null>(null)
@@ -162,7 +165,7 @@ export default function BotiquinAppClient({
     unidad: 'comprimidos' as UnidadMedida,
     cantidad_actual: 10,
     cantidad_inicial: 10,
-    stock_minimo: 2,
+    stock_minimo: 0,
     fecha_vencimiento: '',
     para_que_sirve: '',
     posologia_referencia: '',
@@ -309,12 +312,27 @@ export default function BotiquinAppClient({
     })
   }, [state.medicamentos, state.config.dias_proximo_vencer, filterEstado, filterPublico, searchQuery])
 
+  function updateMedFormAutoStock(
+    patch: Partial<typeof medForm>,
+    forceRecalc = false
+  ) {
+    setMedForm((prev) => {
+      const next = { ...prev, ...patch }
+      if ((!editingMed && !stockMinimoTouched) || forceRecalc) {
+        const esEsencial = esProductoConsideradoEsencial(next, state.esenciales)
+        next.stock_minimo = calcularStockMinimoPorDefecto(next.cantidad_inicial, esEsencial)
+      }
+      return next
+    })
+  }
+
   // Open Modal to Add New Medication
   function openNewMedModal(
     prefill?: Partial<typeof medForm>,
     initialMode: ModoCargaMed = 'hibrido_ia'
   ) {
     setEditingMed(null)
+    setStockMinimoTouched(prefill?.stock_minimo !== undefined)
     setModoCarga(initialMode)
     setAiDetectedFields([])
     setAiMissingFields([])
@@ -328,7 +346,22 @@ export default function BotiquinAppClient({
       unidad: prefill?.unidad || 'comprimidos',
       cantidad_actual: prefill?.cantidad_actual ?? 10,
       cantidad_inicial: prefill?.cantidad_inicial ?? 10,
-      stock_minimo: prefill?.stock_minimo ?? 2,
+      stock_minimo:
+        prefill?.stock_minimo ??
+        calcularStockMinimoPorDefecto(
+          prefill?.cantidad_inicial ?? 10,
+          esProductoConsideradoEsencial(
+            {
+              nombre: prefill?.nombre || '',
+              droga: prefill?.droga || '',
+              para_que_sirve: prefill?.para_que_sirve || '',
+              publico: prefill?.publico || 'adulto',
+              es_esencial: prefill?.es_esencial ?? false,
+              esencial_id: prefill?.esencial_id || '',
+            },
+            state.esenciales
+          )
+        ),
       fecha_vencimiento: prefill?.fecha_vencimiento || '',
       para_que_sirve: prefill?.para_que_sirve || '',
       posologia_referencia: prefill?.posologia_referencia || '',
@@ -343,6 +376,7 @@ export default function BotiquinAppClient({
   // Open Modal to Edit Medication
   function openEditMedModal(med: Medicamento) {
     setEditingMed(med)
+    setStockMinimoTouched(true)
     setModoCarga('hibrido_ia')
     setAiDetectedFields([])
     setAiMissingFields([])
@@ -459,6 +493,23 @@ export default function BotiquinAppClient({
           para_que_sirve: d.para_que_sirve || prev.para_que_sirve,
           posologia_referencia: d.posologia_referencia || prev.posologia_referencia,
           notas: d.notas || prev.notas,
+          stock_minimo:
+            !editingMed && !stockMinimoTouched
+              ? calcularStockMinimoPorDefecto(
+                  nextCantInicial,
+                  esProductoConsideradoEsencial(
+                    {
+                      nombre: d.nombre || prev.nombre,
+                      droga: d.droga || prev.droga,
+                      para_que_sirve: d.para_que_sirve || prev.para_que_sirve,
+                      publico: d.publico || prev.publico,
+                      es_esencial: prev.es_esencial,
+                      esencial_id: prev.esencial_id,
+                    },
+                    state.esenciales
+                  )
+                )
+              : prev.stock_minimo,
         }
       })
 
@@ -911,8 +962,8 @@ export default function BotiquinAppClient({
                 <span className="text-lg font-bold text-foreground tracking-tight block leading-none">
                   Botiquín Virtual
                 </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Stock • Pediatría y Adultos • IA
+                <span className="hidden">
+
                 </span>
               </div>
             </button>
@@ -1048,7 +1099,7 @@ export default function BotiquinAppClient({
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Stock Vigente
+                    Stock Actual
                   </span>
                   <Package className="h-4 w-4 text-primary" />
                 </div>
@@ -1056,16 +1107,16 @@ export default function BotiquinAppClient({
                   <span className="text-2xl md:text-3xl font-bold text-foreground">
                     {kpis.totalVigentes}
                   </span>
-                  <span className="text-xs text-muted-foreground">productos</span>
+
                 </div>
                 <div className="mt-2 flex items-center space-x-3 text-xs text-muted-foreground">
                   <span className="flex items-center space-x-1">
                     <Baby className="h-3.5 w-3.5 text-sky-400" />
-                    <span>{kpis.pediatricosCount} Ped.</span>
+                    <span>{kpis.pediatricosCount} Pediátricos</span>
                   </span>
                   <span className="flex items-center space-x-1">
                     <User className="h-3.5 w-3.5 text-violet-400" />
-                    <span>{kpis.adultosCount} Ad.</span>
+                    <span>{kpis.adultosCount} Adultos</span>
                   </span>
                 </div>
               </div>
@@ -1076,7 +1127,7 @@ export default function BotiquinAppClient({
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Próx. a Vencer
+                    Próximos a Vencer
                   </span>
                   <Clock className="h-4 w-4 text-amber-400" />
                 </div>
@@ -1089,10 +1140,10 @@ export default function BotiquinAppClient({
                     {kpis.proximosCount}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    (&le; {state.config.dias_proximo_vencer} días)
+
                   </span>
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">Clic para filtrar próximos</p>
+
               </div>
 
               <div
@@ -1116,7 +1167,7 @@ export default function BotiquinAppClient({
                     >
                       {kpis.vencidosCount}
                     </span>
-                    <span className="ml-1 text-xs text-muted-foreground">venc.</span>
+
                   </div>
                   <span className="text-muted-foreground">/</span>
                   <div>
@@ -1127,10 +1178,10 @@ export default function BotiquinAppClient({
                     >
                       {kpis.sinStockCount}
                     </span>
-                    <span className="ml-1 text-xs text-muted-foreground">en 0</span>
+
                   </div>
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">Requieren reposición o baja</p>
+
               </div>
 
               <div
@@ -1139,7 +1190,7 @@ export default function BotiquinAppClient({
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    1ra Necesidad
+                    Primera Necesidad
                   </span>
                   <Star className="h-4 w-4 text-violet-400" />
                 </div>
@@ -1147,7 +1198,7 @@ export default function BotiquinAppClient({
                   <span className="text-2xl md:text-3xl font-bold text-foreground">
                     {kpis.esencialesCubiertos}/{kpis.esencialesTotal}
                   </span>
-                  <span className="text-xs text-muted-foreground">cubiertos</span>
+
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
                   {kpis.esencialesTotal - kpis.esencialesCubiertos > 0 ? (
@@ -1389,8 +1440,13 @@ export default function BotiquinAppClient({
                               </span>
                             </div>
 
-                            <h3 className="text-base font-bold text-foreground leading-snug truncate">
-                              {med.nombre}
+                            <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
+                              <span className="block truncate" title={med.nombre}>
+                                {med.nombre}
+                              </span>
+                              <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/nombre:block z-50 w-max max-w-[260px] rounded-lg border border-border bg-zinc-900/95 px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-xl whitespace-normal break-words">
+                                {med.nombre}
+                              </span>
                             </h3>
                             <p className="text-xs text-muted-foreground truncate">
                               {med.droga || 'Sin especificar'}{' '}
@@ -1461,15 +1517,35 @@ export default function BotiquinAppClient({
                         {(med.para_que_sirve || med.posologia_referencia) && (
                           <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                             {med.para_que_sirve && (
-                              <p className="line-clamp-2">
-                                <strong className="text-foreground/90">Para qué sirve:</strong>{' '}
-                                {med.para_que_sirve}
+                              <p className="group/tip relative cursor-default">
+                                <span
+                                  className="line-clamp-2"
+                                  title={`Para qué sirve: ${med.para_que_sirve}`}
+                                >
+                                  <strong className="text-foreground/90">Para qué sirve:</strong>{' '}{med.para_que_sirve}
+  
+                                </span>
+                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-border bg-zinc-900/95 px-3 py-2 text-xs text-zinc-100 shadow-xl whitespace-normal break-words leading-relaxed">
+                                  <strong className="text-emerald-400">Para qué sirve:</strong>{' '}{med.para_que_sirve}
+  
+                                </span>
+
                               </p>
                             )}
                             {med.posologia_referencia && (
-                              <p className="line-clamp-2">
-                                <strong className="text-foreground/90">Dosis ref.:</strong>{' '}
-                                {med.posologia_referencia}
+                              <p className="group/tip relative cursor-default">
+                                <span
+                                  className="line-clamp-2"
+                                  title={`Dosis ref.: ${med.posologia_referencia}`}
+                                >
+                                  <strong className="text-foreground/90">Dosis ref.:</strong>{' '}{med.posologia_referencia}
+  
+                                </span>
+                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-border bg-zinc-900/95 px-3 py-2 text-xs text-zinc-100 shadow-xl whitespace-normal break-words leading-relaxed">
+                                  <strong className="text-sky-400">Dosis ref.:</strong>{' '}{med.posologia_referencia}
+  
+                                </span>
+
                               </p>
                             )}
                           </div>
@@ -1998,8 +2074,8 @@ export default function BotiquinAppClient({
                                 publico: esc.publico,
                                 categoria: esc.categoria,
                                 unidad: esc.unidad_sugerida,
-                                cantidad_actual: esc.stock_minimo_sugerido,
-                                cantidad_inicial: esc.stock_minimo_sugerido,
+                                cantidad_actual: esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                cantidad_inicial: esc.unidad_sugerida === 'ml' ? 100 : 10,
                                 es_esencial: true,
                                 esencial_id: esc.id,
                               })
@@ -2528,7 +2604,7 @@ export default function BotiquinAppClient({
                     required
                     value={medForm.nombre}
                     onChange={(e) => {
-                      setMedForm({ ...medForm, nombre: e.target.value })
+                      updateMedFormAutoStock({ nombre: e.target.value })
                       if (e.target.value.trim()) clearFieldMissingFlag('nombre')
                     }}
                     placeholder="Ej: Ibupirac 4%, Tafirol 1g, Reliveran Gotas"
@@ -2559,7 +2635,7 @@ export default function BotiquinAppClient({
                     type="text"
                     value={medForm.droga}
                     onChange={(e) => {
-                      setMedForm({ ...medForm, droga: e.target.value })
+                      updateMedFormAutoStock({ droga: e.target.value })
                       if (e.target.value.trim()) clearFieldMissingFlag('droga')
                     }}
                     placeholder="Ej: Ibuprofeno, Paracetamol, Metoclopramida"
@@ -2616,7 +2692,7 @@ export default function BotiquinAppClient({
                   <select
                     value={medForm.publico}
                     onChange={(e) =>
-                      setMedForm({ ...medForm, publico: e.target.value as PublicoObjetivo })
+                      updateMedFormAutoStock({ publico: e.target.value as PublicoObjetivo })
                     }
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
                   >
@@ -2731,7 +2807,7 @@ export default function BotiquinAppClient({
                     min="1"
                     value={medForm.cantidad_inicial}
                     onChange={(e) => {
-                      setMedForm({ ...medForm, cantidad_inicial: Number(e.target.value) })
+                      updateMedFormAutoStock({ cantidad_inicial: Number(e.target.value) })
                       clearFieldMissingFlag('cantidad_inicial')
                     }}
                     className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
@@ -2748,7 +2824,10 @@ export default function BotiquinAppClient({
                     min="0"
                     value={medForm.stock_minimo}
                     onChange={(e) =>
-                      setMedForm({ ...medForm, stock_minimo: Number(e.target.value) })
+                      {
+                        setStockMinimoTouched(true)
+                        setMedForm({ ...medForm, stock_minimo: Number(e.target.value) })
+                      }
                     }
                     className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
                   />
@@ -2764,7 +2843,7 @@ export default function BotiquinAppClient({
                   <input
                     type="text"
                     value={medForm.para_que_sirve}
-                    onChange={(e) => setMedForm({ ...medForm, para_que_sirve: e.target.value })}
+                    onChange={(e) => updateMedFormAutoStock({ para_que_sirve: e.target.value })}
                     placeholder="Ej: Fiebre, dolor de espalda, contracturas, dolor de cabeza..."
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
                   />
@@ -2797,6 +2876,19 @@ export default function BotiquinAppClient({
                           ...medForm,
                           esencial_id: e.target.value,
                           es_esencial: Boolean(e.target.value),
+                          stock_minimo: !stockMinimoTouched
+                            ? calcularStockMinimoPorDefecto(
+                                medForm.cantidad_inicial,
+                                esProductoConsideradoEsencial(
+                                  {
+                                    ...medForm,
+                                    esencial_id: e.target.value,
+                                    es_esencial: Boolean(e.target.value),
+                                  },
+                                  state.esenciales
+                                )
+                              )
+                            : medForm.stock_minimo,
                         })
                       }
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"

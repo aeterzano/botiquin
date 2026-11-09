@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import {
   calcularAlertasActivas,
+  calcularStockMinimoPorDefecto,
+  esProductoConsideradoEsencial,
   DEFAULT_ESENCIALES,
   loadBotiquinState,
   Medicamento,
@@ -76,7 +78,26 @@ export async function POST(req: NextRequest) {
         unidad: (payload.unidad || 'comprimidos') as UnidadMedida,
         cantidad_actual: cantActual,
         cantidad_inicial: Math.max(cantInicial, cantActual),
-        stock_minimo: Math.max(0, Number(payload.stock_minimo ?? 1)),
+        stock_minimo: Math.max(
+          0,
+          Number(
+            payload.stock_minimo ??
+              calcularStockMinimoPorDefecto(
+                Math.max(cantInicial, cantActual),
+                esProductoConsideradoEsencial(
+                  {
+                    nombre: payload.nombre,
+                    droga: payload.droga,
+                    para_que_sirve: payload.para_que_sirve,
+                    publico: payload.publico,
+                    es_esencial: Boolean(payload.es_esencial),
+                    esencial_id: payload.esencial_id || null,
+                  },
+                  state.esenciales
+                )
+              )
+          )
+        ),
         fecha_vencimiento: payload.fecha_vencimiento || null,
         para_que_sirve: (payload.para_que_sirve || '').trim(),
         posologia_referencia: (payload.posologia_referencia || '').trim(),

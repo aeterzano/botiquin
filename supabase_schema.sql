@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS public.botiquin_medicamentos (
   unidad TEXT NOT NULL DEFAULT 'comprimidos', -- 'comprimidos' | 'ml' | 'gotas' | 'sobres' | 'ampollas' | 'g' | 'unidades'
   cantidad_actual NUMERIC NOT NULL DEFAULT 0,
   cantidad_inicial NUMERIC NOT NULL DEFAULT 0,
-  stock_minimo NUMERIC NOT NULL DEFAULT 1,
+  stock_minimo NUMERIC NOT NULL DEFAULT 0,
   fecha_vencimiento DATE,
   para_que_sirve TEXT NOT NULL DEFAULT '',
   posologia_referencia TEXT NOT NULL DEFAULT '',

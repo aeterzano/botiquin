@@ -280,7 +280,7 @@ function normalizeMedicamento(m: Medicamento): Medicamento {
     ...m,
     cantidad_actual: Number(m.cantidad_actual ?? 0),
     cantidad_inicial: Number(m.cantidad_inicial ?? 0),
-    stock_minimo: Number(m.stock_minimo ?? 1),
+    stock_minimo: Number(m.stock_minimo ?? 0),
     foto_url: m.foto_url || fotosArray[0] || null,
     fotos_urls: fotosArray,
     es_esencial: Boolean(m.es_esencial),

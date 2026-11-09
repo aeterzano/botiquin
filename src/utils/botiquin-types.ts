@@ -142,6 +142,49 @@ export function esMedicamentoProximoAVencer(med: Medicamento, umbralDias: number
   return dias !== null && dias >= 0 && dias <= umbralDias
 }
 
+export function esProductoConsideradoEsencial(
+  med: {
+    nombre?: string
+    droga?: string
+    para_que_sirve?: string
+    publico?: PublicoObjetivo
+    es_esencial?: boolean
+    esencial_id?: string | null
+  },
+  esenciales: ProductoEsencial[]
+): boolean {
+  if (med.es_esencial || med.esencial_id) return true
+
+  const textoMed = `${med.nombre || ''} ${med.droga || ''} ${med.para_que_sirve || ''}`
+    .toLowerCase()
+    .trim()
+  if (!textoMed) return false
+
+  const esencialesActivos = esenciales.filter((e) => e.activo)
+  return esencialesActivos.some((esencial) => {
+    const publicoCompatible =
+      !med.publico ||
+      esencial.publico === 'ambos' ||
+      med.publico === 'ambos' ||
+      med.publico === esencial.publico
+
+    if (!publicoCompatible) return false
+
+    return esencial.keywords.some(
+      (kw) => kw.trim() && textoMed.includes(kw.toLowerCase().trim())
+    )
+  })
+}
+
+export function calcularStockMinimoPorDefecto(
+  cantidadInicial: number,
+  esEsencial: boolean
+): number {
+  if (!esEsencial) return 0
+  const base = Math.max(0, Number(cantidadInicial) || 0)
+  return Number((base * 0.2).toFixed(2))
+}
+
 export function verificarCoberturaEsencial(
   esencial: ProductoEsencial,
   medicamentos: Medicamento[]
