@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  botiquin-app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+        CRON_SECRET: ${CRON_SECRET}
+        GEMINI_API_KEY: ${GEMINI_API_KEY}
+    container_name: botiquin-app
+    restart: always
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CRON_SECRET=${CRON_SECRET}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASS=${EMAIL_PASS}
+      - ALERT_RECIPIENT_EMAIL=${ALERT_RECIPIENT_EMAIL}
