@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo, useRef } from 'react'
+import React, { useState, useMemo, useRef, useEffect } from 'react'
 import {
   HeartPulse,
   Package,
@@ -34,11 +34,9 @@ import {
   ShieldAlert,
   Pill,
   Droplets,
-  Calendar,
   Info,
   ArchiveX,
   Images,
-  PenTool,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react'
@@ -63,6 +61,7 @@ import { CampoFaltanteIA, ConsultaAIResponse } from '@/utils/ai-botiquin'
 
 type TabType = 'stock' | 'consulta' | 'esenciales' | 'alertas'
 type ModoCargaMed = 'hibrido_ia' | 'manual'
+type MedModalTab = 'general' | 'stock' | 'uso'
 
 interface ChatItem {
   id: string
@@ -84,6 +83,34 @@ const UNIDADES_OPTIONS: { value: UnidadMedida; label: string }[] = [
   { value: 'disparos', label: 'Disparos / Spray' },
   { value: 'unidades', label: 'Unidades' },
 ]
+
+function formatMesAnio(fecha: string | null | undefined): string {
+  if (!fecha) return '-'
+  const parts = fecha.split('-')
+  if (parts.length >= 2) {
+    return `${parts[1]}/${parts[0]}`
+  }
+  return fecha
+}
+
+function resumirSintomas(texto: string | null | undefined): string {
+  if (!texto) return ''
+  let t = texto.trim()
+  const prefixes = [
+    /^se\s+utiliza\s+para\s+(el\s+)?(alivio\s+(sintom[aá]tico\s+)?(de|del|de\s+la|de\s+los|de\s+las)\s+)?/i,
+    /^indicado\s+para\s+(el\s+)?(tratamiento\s+(y\s+alivio\s+)?(de|del|de\s+la|de\s+los|de\s+las)\s+)?/i,
+    /^alivio\s+(sintom[aá]tico\s+)?(temporal\s+)?(de|del|de\s+la|de\s+los|de\s+las)\s+/i,
+    /^tratamiento\s+(sintom[aá]tico\s+)?(de|del|de\s+la|de\s+los|de\s+las)\s+/i,
+    /^sirve\s+para\s+(tratar\s+|aliviar\s+)?(el\s+|la\s+|los\s+|las\s+)?/i,
+    /^para\s+(el\s+)?(alivio\s+de\s+|tratar\s+)?/i,
+  ]
+  for (const rx of prefixes) {
+    t = t.replace(rx, '')
+  }
+  t = t.replace(/\.$/, '').trim()
+  if (!t) return texto
+  return t.charAt(0).toUpperCase() + t.slice(1)
+}
 
 async function compressImageFile(file: File, maxWidth = 1280, quality = 0.82): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -137,11 +164,12 @@ export default function BotiquinAppClient({
   const [searchQuery, setSearchQuery] = useState('')
   const [filterPublico, setFilterPublico] = useState<'todos' | PublicoObjetivo>('todos')
   const [filterEstado, setFilterEstado] = useState<
-    'activos' | 'proximo_vencer' | 'vencidos' | 'sin_stock' | 'bajas'
+    'activos' | 'proximo_vencer' | 'vencidos_sin_stock' | 'bajas'
   >('activos')
 
-  // Add / Edit Medication Modal (Multi-Photo + Auto/Hybrid/Manual)
+  // Add / Edit Medication Modal (Compact with 3 Tabs)
   const [medModalOpen, setMedModalOpen] = useState(false)
+  const [medModalTab, setMedModalTab] = useState<MedModalTab>('general')
   const [editingMed, setEditingMed] = useState<Medicamento | null>(null)
   const [modoCarga, setModoCarga] = useState<ModoCargaMed>('hibrido_ia')
   const [analyzingPhoto, setAnalyzingPhoto] = useState(false)
@@ -170,7 +198,7 @@ export default function BotiquinAppClient({
     para_que_sirve: '',
     posologia_referencia: '',
     notas: '',
-    fotos_input: [] as string[], // 1 or more base64 or public URLs
+    fotos_input: [] as string[],
     es_esencial: false,
     esencial_id: '',
   })
@@ -225,6 +253,47 @@ export default function BotiquinAppClient({
   const [savingConfig, setSavingConfig] = useState(false)
   const [sendingEmailNow, setSendingEmailNow] = useState(false)
 
+  // Close any open pop-up when pressing ESC
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (lightboxPhotos.length > 0) {
+          setLightboxPhotos([])
+          return
+        }
+        if (dosisModalMed) {
+          setDosisModalMed(null)
+          return
+        }
+        if (reponerModalMed) {
+          setReponerModalMed(null)
+          return
+        }
+        if (bajaModalMed) {
+          setBajaModalMed(null)
+          return
+        }
+        if (esencialModalOpen) {
+          setEsencialModalOpen(false)
+          return
+        }
+        if (medModalOpen) {
+          setMedModalOpen(false)
+          return
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    lightboxPhotos.length,
+    dosisModalMed,
+    reponerModalMed,
+    bajaModalMed,
+    esencialModalOpen,
+    medModalOpen,
+  ])
+
   function showToast(text: string, type: 'success' | 'error' | 'info' = 'success') {
     setToast({ text, type })
     setTimeout(() => {
@@ -232,10 +301,8 @@ export default function BotiquinAppClient({
     }, 4500)
   }
 
-  // Helper to check if a field is still flagged as missing by the hybrid AI check
   function isFieldMissingFromAI(fieldName: string): boolean {
     if (!aiMissingFields.some((f) => f.campo === fieldName)) return false
-    // Clear warning automatically once user types a value into that field
     if (fieldName === 'nombre' && medForm.nombre.trim()) return false
     if (fieldName === 'droga' && medForm.droga.trim()) return false
     if (fieldName === 'concentracion' && medForm.concentracion.trim()) return false
@@ -293,8 +360,12 @@ export default function BotiquinAppClient({
         if (med.estado !== 'activo') return false
         if (filterEstado === 'proximo_vencer' && !esMedicamentoProximoAVencer(med, umbral))
           return false
-        if (filterEstado === 'vencidos' && !esMedicamentoVencido(med)) return false
-        if (filterEstado === 'sin_stock' && med.cantidad_actual > 0) return false
+        if (
+          filterEstado === 'vencidos_sin_stock' &&
+          !esMedicamentoVencido(med) &&
+          med.cantidad_actual > 0
+        )
+          return false
       }
 
       if (filterPublico !== 'todos') {
@@ -332,6 +403,7 @@ export default function BotiquinAppClient({
     initialMode: ModoCargaMed = 'hibrido_ia'
   ) {
     setEditingMed(null)
+    setMedModalTab('general')
     setStockMinimoTouched(prefill?.stock_minimo !== undefined)
     setModoCarga(initialMode)
     setAiDetectedFields([])
@@ -376,6 +448,7 @@ export default function BotiquinAppClient({
   // Open Modal to Edit Medication
   function openEditMedModal(med: Medicamento) {
     setEditingMed(med)
+    setMedModalTab('general')
     setStockMinimoTouched(true)
     setModoCarga('hibrido_ia')
     setAiDetectedFields([])
@@ -422,16 +495,13 @@ export default function BotiquinAppClient({
 
       const updatedPhotos = [...medForm.fotos_input, ...compressedList]
       setMedForm((prev) => ({ ...prev, fotos_input: updatedPhotos }))
-
-      // Reset file input value so selecting the same or another file works again
       e.target.value = ''
 
-      // If in hybrid/auto IA mode, automatically analyze all photos together
       if (modoCarga === 'hibrido_ia') {
         await analyzePhotosWithAI(updatedPhotos)
       } else {
         showToast(
-          `${compressedList.length} foto(s) agregada(s). Podés completar a mano o tocar "Analizar con IA".`,
+          `${compressedList.length} foto(s) agregada(s).`,
           'info'
         )
       }
@@ -469,7 +539,6 @@ export default function BotiquinAppClient({
 
       const d = json.data
       setMedForm((prev) => {
-        // Hybrid merge: if AI found a value, fill it; if AI didn't find it in the new photo, keep whatever the user already typed!
         const nextCantInicial =
           d.cantidad_inicial !== null && d.cantidad_inicial !== undefined
             ? Number(d.cantidad_inicial)
@@ -517,13 +586,13 @@ export default function BotiquinAppClient({
       setAiMissingFields(Array.isArray(d.campos_faltantes) ? d.campos_faltantes : [])
       setAiHybridMessage(
         d.mensaje_hibrido ||
-          'Se completaron los datos detectados en las fotos. Completá manualmente los datos faltantes resaltados.'
+          'Se completaron los datos detectados en las fotos. Revisá las solapas para verificar los campos.'
       )
 
       showToast(
         photos.length > 1
-          ? `¡${photos.length} fotos analizadas con IA! Revisá los campos resaltados si falta algún dato.`
-          : '¡Foto analizada con IA! Completá manualmente lo que no figuraba en la imagen.',
+          ? `¡${photos.length} fotos analizadas con IA!`
+          : '¡Foto analizada con IA!',
         'success'
       )
     } catch (err: unknown) {
@@ -537,6 +606,7 @@ export default function BotiquinAppClient({
   async function handleSaveMedicamento(e: React.FormEvent) {
     e.preventDefault()
     if (!medForm.nombre.trim()) {
+      setMedModalTab('general')
       showToast('Ingresá el nombre del medicamento', 'error')
       return
     }
@@ -600,7 +670,7 @@ export default function BotiquinAppClient({
       setDosisMotivo('')
       showToast(
         `Se descontaron ${dosisCantidad} ${dosisModalMed.unidad} de ${dosisModalMed.nombre}${
-          json.emailSent ? ' • Se envió alerta por email a aeterzano@gmail.com' : ''
+          json.emailSent ? ' • Se envió alerta por email' : ''
         }`,
         'success'
       )
@@ -735,10 +805,10 @@ export default function BotiquinAppClient({
       text: queryText,
       pacienteTipo:
         pacienteTipo === 'pediatrico'
-          ? '👶 Bebé / Pediátrico'
+          ? '👶 Pediátrico'
           : pacienteTipo === 'adulto'
           ? '🧑 Adulto'
-          : 'Automático',
+          : 'Auto',
       edadPeso: edadPesoDetalle,
       timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
     }
@@ -840,14 +910,14 @@ export default function BotiquinAppClient({
       setState(json.state)
       setAlertas(json.alertasActivas)
       setEsencialModalOpen(false)
-      showToast('Producto de primera necesidad guardado', 'success')
+      showToast('Producto esencial guardado', 'success')
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Error guardando esencial', 'error')
     }
   }
 
   async function handleDeleteEsencial(id: string, nombre: string) {
-    if (!confirm(`¿Quitar "${nombre}" de la lista de productos de primera necesidad?`)) return
+    if (!confirm(`¿Quitar "${nombre}" de la lista de esenciales?`)) return
     try {
       const res = await fetch('/api/botiquin', {
         method: 'POST',
@@ -882,7 +952,7 @@ export default function BotiquinAppClient({
 
       setState(json.state)
       setAlertas(json.alertasActivas)
-      showToast('Configuración de alertas actualizada', 'success')
+      showToast('Configuración actualizada', 'success')
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Error guardando configuración', 'error')
     } finally {
@@ -912,7 +982,7 @@ export default function BotiquinAppClient({
       } else if (json.result?.error) {
         showToast(`Error SMTP: ${json.result.error}`, 'error')
       } else {
-        showToast('No hay alertas activas pendientes para enviar por correo.', 'info')
+        showToast('No hay alertas activas pendientes para enviar.', 'info')
       }
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Error enviando correo', 'error')
@@ -921,73 +991,69 @@ export default function BotiquinAppClient({
     }
   }
 
+  const greyBtn =
+    'bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-600/80 transition-colors'
+  const greyBtnActive =
+    'bg-zinc-700 text-white border border-zinc-400 shadow-sm transition-colors'
+
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground pb-20 md:pb-8">
+    <div className="min-h-screen flex flex-col bg-[#0b0c10] text-foreground pb-24 md:pb-12">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-20 md:bottom-6 right-4 z-50 max-w-md animate-in fade-in slide-in-from-bottom-3">
           <div
             className={`flex items-center space-x-3 rounded-xl border px-4 py-3 shadow-2xl ${
               toast.type === 'error'
-                ? 'bg-red-950/95 border-red-500/40 text-red-200'
+                ? 'bg-red-950/95 border-red-400/50 text-red-100'
                 : toast.type === 'info'
-                ? 'bg-zinc-900/95 border-zinc-700 text-zinc-100'
-                : 'bg-emerald-950/95 border-emerald-500/40 text-emerald-100'
+                ? 'bg-zinc-900/95 border-zinc-600 text-zinc-100'
+                : 'bg-zinc-900/95 border-red-400/50 text-red-100'
             }`}
           >
             {toast.type === 'error' ? (
               <XCircle className="h-5 w-5 text-red-400 shrink-0" />
             ) : toast.type === 'info' ? (
-              <Info className="h-5 w-5 text-blue-400 shrink-0" />
+              <Info className="h-5 w-5 text-zinc-300 shrink-0" />
             ) : (
-              <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
+              <CheckCircle2 className="h-5 w-5 text-red-400 shrink-0" />
             )}
             <span className="text-sm font-medium">{toast.text}</span>
           </div>
         </div>
       )}
 
-      {/* Navbar */}
-      <nav className="border-b border-border bg-card px-4 md:px-6 py-3.5 sticky top-0 z-40">
+      {/* Navbar with high contrast against the dark background */}
+      <nav className="border-b border-[#383e4e] bg-[#1e222d] px-4 md:px-8 py-4 sticky top-0 z-40 shadow-lg">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div className="flex items-center space-x-6">
+          <div className="flex items-center space-x-8">
             <button
               onClick={() => setActiveTab('stock')}
-              className="flex items-center space-x-2.5 text-left"
+              className="flex items-center space-x-3 text-left"
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/30 text-primary">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/40 text-primary">
                 <HeartPulse className="h-5 w-5" />
               </div>
-              <div>
-                <span className="text-lg font-bold text-foreground tracking-tight block leading-none">
-                  Botiquín Virtual
-                </span>
-                <span className="hidden">
-
-                </span>
-              </div>
+              <span className="text-lg font-bold text-foreground tracking-tight block leading-none">
+                Botiquín Virtual
+              </span>
             </button>
 
             {/* Desktop Nav Links */}
-            <div className="hidden md:flex items-center space-x-1.5">
+            <div className="hidden md:flex items-center space-x-2">
               <button
                 onClick={() => setActiveTab('stock')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === 'stock'
-                    ? 'bg-primary/15 text-primary border border-primary/25'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  activeTab === 'stock' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Package className="h-4 w-4" />
-                <span>Mi Stock ({kpis.totalVigentes})</span>
+                <span>Stock</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('consulta')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === 'consulta'
-                    ? 'bg-primary/15 text-primary border border-primary/25'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  activeTab === 'consulta' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Bot className="h-4 w-4" />
@@ -996,50 +1062,39 @@ export default function BotiquinAppClient({
 
               <button
                 onClick={() => setActiveTab('esenciales')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === 'esenciales'
-                    ? 'bg-primary/15 text-primary border border-primary/25'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  activeTab === 'esenciales' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Star className="h-4 w-4" />
-                <span>
-                  1ra Necesidad ({kpis.esencialesCubiertos}/{kpis.esencialesTotal})
-                </span>
+                <span>Esenciales</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('alertas')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === 'alertas'
-                    ? 'bg-primary/15 text-primary border border-primary/25'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  activeTab === 'alertas' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Bell className="h-4 w-4" />
-                <span>Alertas y Config</span>
-                {alertas.length > 0 && (
-                  <span className="ml-1 rounded-full bg-red-500 px-1.5 py-0.5 text-[11px] font-bold text-white">
-                    {alertas.length}
-                  </span>
-                )}
+                <span>Alertas</span>
               </button>
             </div>
           </div>
 
           <div className="hidden md:flex items-center space-x-3">
+            {/* ONLY colored button in the entire app */}
             <button
               onClick={() => openNewMedModal()}
-              className="flex items-center space-x-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+              className="flex items-center space-x-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 shadow-sm transition-colors"
             >
-              <Plus className="h-4 w-4" />
-              <span>Cargar Medicamento</span>
+              <span>+ Medicamento</span>
             </button>
 
             <form action="/auth/signout" method="post">
               <button
                 title={`Cerrar sesión (${userEmail})`}
-                className="flex items-center space-x-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className={`flex items-center space-x-1.5 rounded-lg px-3.5 py-2 text-sm font-medium ${greyBtn}`}
               >
                 <LogOut className="h-4 w-4" />
                 <span>Salir</span>
@@ -1053,12 +1108,11 @@ export default function BotiquinAppClient({
               onClick={() => openNewMedModal()}
               className="flex items-center space-x-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
             >
-              <Plus className="h-4 w-4" />
-              <span>Cargar</span>
+              <span>+ Medicamento</span>
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-lg text-foreground hover:bg-muted"
+              className={`p-2 rounded-lg ${greyBtn}`}
             >
               {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
@@ -1067,35 +1121,35 @@ export default function BotiquinAppClient({
 
         {/* Mobile Dropdown Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-border mt-3 pt-4 pb-2 flex flex-col space-y-2">
+          <div className="md:hidden border-t border-[#383e4e] mt-3 pt-4 pb-2 flex flex-col space-y-2">
             <div className="text-xs text-muted-foreground px-2 pb-1 truncate">
               Sesión: {userEmail}
             </div>
             <form action="/auth/signout" method="post">
-              <button className="w-full flex items-center space-x-2 rounded-lg px-3 py-2 text-sm font-medium text-red-400 hover:bg-muted">
+              <button className={`w-full flex items-center justify-center space-x-2 rounded-lg px-3 py-2 text-sm font-medium ${greyBtn}`}>
                 <LogOut className="h-4 w-4" />
-                <span>Cerrar Sesión</span>
+                <span>Salir</span>
               </button>
             </form>
           </div>
         )}
       </nav>
 
-      {/* Main Content Container */}
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 md:px-6 py-6">
+      {/* Main Content Container with generous breathing room */}
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 md:px-8 py-8">
         {/* ================================================================= */}
-        {/* TAB 1: MI STOCK                                                   */}
+        {/* TAB 1: STOCK                                                      */}
         {/* ================================================================= */}
         {activeTab === 'stock' && (
-          <div className="space-y-6">
-            {/* Top Summary Banner & Quick Actions */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+          <div className="space-y-8">
+            {/* 4 Compact Top Summary Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
               <div
                 onClick={() => {
                   setFilterEstado('activos')
                   setFilterPublico('todos')
                 }}
-                className="cursor-pointer rounded-xl border border-border bg-card p-4 hover:border-primary/40 transition-colors"
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1103,27 +1157,19 @@ export default function BotiquinAppClient({
                   </span>
                   <Package className="h-4 w-4 text-primary" />
                 </div>
-                <div className="mt-2 flex items-baseline space-x-2">
-                  <span className="text-2xl md:text-3xl font-bold text-foreground">
+                <div className="mt-1.5 flex items-baseline flex-wrap gap-x-2 gap-y-0.5">
+                  <span className="text-2xl font-bold text-foreground">
                     {kpis.totalVigentes}
                   </span>
-
-                </div>
-                <div className="mt-2 flex items-center space-x-3 text-xs text-muted-foreground">
-                  <span className="flex items-center space-x-1">
-                    <Baby className="h-3.5 w-3.5 text-sky-400" />
-                    <span>{kpis.pediatricosCount} Pediátricos</span>
-                  </span>
-                  <span className="flex items-center space-x-1">
-                    <User className="h-3.5 w-3.5 text-violet-400" />
-                    <span>{kpis.adultosCount} Adultos</span>
+                  <span className="text-xs text-muted-foreground">
+                    ({kpis.pediatricosCount} Pediátricos · {kpis.adultosCount} Adultos)
                   </span>
                 </div>
               </div>
 
               <div
                 onClick={() => setFilterEstado('proximo_vencer')}
-                className="cursor-pointer rounded-xl border border-border bg-card p-4 hover:border-amber-500/40 transition-colors"
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-amber-400/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1131,26 +1177,20 @@ export default function BotiquinAppClient({
                   </span>
                   <Clock className="h-4 w-4 text-amber-400" />
                 </div>
-                <div className="mt-2 flex items-baseline space-x-2">
+                <div className="mt-1.5 flex items-baseline">
                   <span
-                    className={`text-2xl md:text-3xl font-bold ${
+                    className={`text-2xl font-bold ${
                       kpis.proximosCount > 0 ? 'text-amber-400' : 'text-foreground'
                     }`}
                   >
                     {kpis.proximosCount}
                   </span>
-                  <span className="text-xs text-muted-foreground">
-
-                  </span>
                 </div>
-
               </div>
 
               <div
-                onClick={() =>
-                  setFilterEstado(kpis.vencidosCount > 0 ? 'vencidos' : 'sin_stock')
-                }
-                className="cursor-pointer rounded-xl border border-border bg-card p-4 hover:border-red-500/40 transition-colors"
+                onClick={() => setFilterEstado('vencidos_sin_stock')}
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-red-400/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1158,127 +1198,80 @@ export default function BotiquinAppClient({
                   </span>
                   <AlertTriangle className="h-4 w-4 text-red-400" />
                 </div>
-                <div className="mt-2 flex items-baseline space-x-3">
-                  <div>
-                    <span
-                      className={`text-2xl md:text-3xl font-bold ${
-                        kpis.vencidosCount > 0 ? 'text-red-400' : 'text-foreground'
-                      }`}
-                    >
-                      {kpis.vencidosCount}
-                    </span>
-
-                  </div>
+                <div className="mt-1.5 flex items-baseline space-x-2">
+                  <span
+                    className={`text-2xl font-bold ${
+                      kpis.vencidosCount > 0 ? 'text-red-400' : 'text-foreground'
+                    }`}
+                  >
+                    {kpis.vencidosCount}
+                  </span>
                   <span className="text-muted-foreground">/</span>
-                  <div>
-                    <span
-                      className={`text-2xl md:text-3xl font-bold ${
-                        kpis.sinStockCount > 0 ? 'text-rose-400' : 'text-foreground'
-                      }`}
-                    >
-                      {kpis.sinStockCount}
-                    </span>
-
-                  </div>
+                  <span
+                    className={`text-2xl font-bold ${
+                      kpis.sinStockCount > 0 ? 'text-rose-400' : 'text-foreground'
+                    }`}
+                  >
+                    {kpis.sinStockCount}
+                  </span>
                 </div>
-
               </div>
 
               <div
                 onClick={() => setActiveTab('esenciales')}
-                className="cursor-pointer rounded-xl border border-border bg-card p-4 hover:border-violet-500/40 transition-colors"
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                     Primera Necesidad
                   </span>
-                  <Star className="h-4 w-4 text-violet-400" />
+                  <Star className="h-4 w-4 text-primary" />
                 </div>
-                <div className="mt-2 flex items-baseline space-x-2">
-                  <span className="text-2xl md:text-3xl font-bold text-foreground">
+                <div className="mt-1.5 flex items-baseline">
+                  <span className="text-2xl font-bold text-foreground">
                     {kpis.esencialesCubiertos}/{kpis.esencialesTotal}
                   </span>
-
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {kpis.esencialesTotal - kpis.esencialesCubiertos > 0 ? (
-                    <span className="text-amber-400 font-medium">
-                      Faltan {kpis.esencialesTotal - kpis.esencialesCubiertos} esenciales
-                    </span>
-                  ) : (
-                    <span className="text-emerald-400">Botiquín esencial completo</span>
-                  )}
-                </p>
-              </div>
-            </div>
-
-            {/* Quick CTA Banner to AI Consultation */}
-            <div className="rounded-2xl border border-primary/25 bg-gradient-to-r from-emerald-950/40 via-card to-card p-4 md:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div className="flex items-start space-x-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/20 text-primary border border-primary/30">
-                  <Bot className="h-6 w-6" />
-                </div>
-                <div>
-                  <h2 className="text-base font-semibold text-foreground">
-                    ¿Tenés algún síntoma o consulta sobre qué tomar o darle al bebé?
-                  </h2>
-                  <p className="text-xs md:text-sm text-muted-foreground mt-0.5">
-                    Consultale a la IA: revisa tu stock vigente, separa pediátricos de adultos y te avisa si tenés que comprar algo.
-                  </p>
                 </div>
               </div>
-              <button
-                onClick={() => setActiveTab('consulta')}
-                className="w-full md:w-auto shrink-0 flex items-center justify-center space-x-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
-              >
-                <Sparkles className="h-4 w-4" />
-                <span>Consultar a la IA</span>
-              </button>
             </div>
 
             {/* Filters & Search Bar */}
-            <div className="flex flex-col space-y-3 rounded-xl border border-border bg-card p-4">
-              <div className="flex flex-col md:flex-row gap-3">
+            <div className="flex flex-col space-y-4 rounded-xl border border-[#323846] bg-[#171a22] p-5">
+              <div className="flex flex-col md:flex-row gap-3.5">
                 <div className="relative flex-1">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Buscar por nombre, droga o síntoma (ej: Tafirol, Ibuprofeno, fiebre, vómito)..."
-                    className="w-full rounded-lg border border-border bg-background pl-10 pr-4 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                    placeholder="Buscar por nombre, droga o síntoma..."
+                    className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] pl-10 pr-4 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
                   />
                 </div>
 
-                {/* Público Filter Pills */}
-                <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 md:pb-0">
+                {/* Público Filter Pills (1-word grey buttons) */}
+                <div className="flex items-center space-x-2 overflow-x-auto pb-1 md:pb-0">
                   <button
                     onClick={() => setFilterPublico('todos')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                      filterPublico === 'todos'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background border border-border text-muted-foreground hover:text-foreground'
+                    className={`px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap ${
+                      filterPublico === 'todos' ? greyBtnActive : greyBtn
                     }`}
                   >
                     Todos
                   </button>
                   <button
                     onClick={() => setFilterPublico('pediatrico')}
-                    className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                      filterPublico === 'pediatrico'
-                        ? 'bg-sky-500 text-white'
-                        : 'bg-background border border-border text-muted-foreground hover:text-foreground'
+                    className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap ${
+                      filterPublico === 'pediatrico' ? greyBtnActive : greyBtn
                     }`}
                   >
                     <Baby className="h-3.5 w-3.5" />
-                    <span>Pediátrico / Bebé</span>
+                    <span>Pediátrico</span>
                   </button>
                   <button
                     onClick={() => setFilterPublico('adulto')}
-                    className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                      filterPublico === 'adulto'
-                        ? 'bg-violet-500 text-white'
-                        : 'bg-background border border-border text-muted-foreground hover:text-foreground'
+                    className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap ${
+                      filterPublico === 'adulto' ? greyBtnActive : greyBtn
                     }`}
                   >
                     <User className="h-3.5 w-3.5" />
@@ -1288,13 +1281,12 @@ export default function BotiquinAppClient({
               </div>
 
               {/* Status Filter Tabs */}
-              <div className="flex items-center space-x-2 overflow-x-auto pt-1 border-t border-border/60">
+              <div className="flex items-center space-x-2 overflow-x-auto pt-3 border-t border-[#2c313f]">
                 {[
-                  { id: 'activos', label: 'Activos en Botiquín' },
-                  { id: 'proximo_vencer', label: `Próximos a vencer (${kpis.proximosCount})` },
-                  { id: 'vencidos', label: `Vencidos (${kpis.vencidosCount})` },
-                  { id: 'sin_stock', label: `Sin stock (${kpis.sinStockCount})` },
-                  { id: 'bajas', label: 'Dados de baja / Historial' },
+                  { id: 'activos', label: 'Stock actual' },
+                  { id: 'proximo_vencer', label: 'Próximos a vencer' },
+                  { id: 'vencidos_sin_stock', label: 'Vencidos / Sin stock' },
+                  { id: 'bajas', label: 'Bajas' },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -1303,15 +1295,14 @@ export default function BotiquinAppClient({
                         tab.id as
                           | 'activos'
                           | 'proximo_vencer'
-                          | 'vencidos'
-                          | 'sin_stock'
+                          | 'vencidos_sin_stock'
                           | 'bajas'
                       )
                     }
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
                       filterEstado === tab.id
-                        ? 'bg-muted text-foreground font-semibold'
-                        : 'text-muted-foreground hover:text-foreground'
+                        ? 'bg-zinc-700 text-white font-semibold border border-zinc-500/80'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800/60'
                     }`}
                   >
                     {tab.label}
@@ -1322,33 +1313,22 @@ export default function BotiquinAppClient({
 
             {/* Medications Grid */}
             {filteredMeds.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-border bg-card/50 p-10 text-center">
-                <Pill className="mx-auto h-12 w-12 text-muted-foreground/50 mb-3" />
-                <h3 className="text-lg font-semibold text-foreground">
+              <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-12 text-center">
+                <Pill className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
+                <h3 className="text-base font-semibold text-foreground">
                   No hay medicamentos en esta vista
                 </h3>
-                <p className="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
-                  Podés dar de alta un medicamento subiendo 1 o más fotos (modo automático / híbrido con IA) o ingresando los datos manualmente.
-                </p>
-                <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                <div className="mt-5 flex items-center justify-center">
                   <button
                     onClick={() => openNewMedModal(undefined, 'hibrido_ia')}
-                    className="inline-flex items-center space-x-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+                    className={`inline-flex items-center space-x-2 rounded-xl px-5 py-2.5 text-sm font-medium ${greyBtn}`}
                   >
-                    <Camera className="h-4 w-4" />
-                    <span>Cargar con Fotos + IA (Híbrido)</span>
-                  </button>
-                  <button
-                    onClick={() => openNewMedModal(undefined, 'manual')}
-                    className="inline-flex items-center space-x-2 rounded-xl border border-border bg-card px-5 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
-                  >
-                    <PenTool className="h-4 w-4" />
-                    <span>Carga Manual</span>
+                    <span>+ Medicamento</span>
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredMeds.map((med) => {
                   const diasVenc = calcularDiasVencimiento(med.fecha_vencimiento)
                   const vencido = diasVenc !== null && diasVenc < 0
@@ -1360,7 +1340,9 @@ export default function BotiquinAppClient({
                   const pct =
                     med.cantidad_inicial > 0
                       ? Math.min(100, Math.round((med.cantidad_actual / med.cantidad_inicial) * 100))
-                      : 100
+                      : med.cantidad_actual > 0
+                      ? 100
+                      : 0
 
                   const allPhotos =
                     med.fotos_urls && med.fotos_urls.length > 0
@@ -1369,22 +1351,24 @@ export default function BotiquinAppClient({
                       ? [med.foto_url]
                       : []
 
+                  const sintomasResumidos = resumirSintomas(med.para_que_sirve)
+
                   return (
                     <div
                       key={med.id}
-                      className={`flex flex-col justify-between rounded-2xl border bg-card p-4 shadow-sm transition-all ${
+                      className={`flex flex-col justify-between rounded-2xl border bg-[#171a22] p-5 shadow-md transition-all ${
                         vencido
-                          ? 'border-red-500/50 bg-red-950/10'
+                          ? 'border-red-400/50'
                           : proximo
-                          ? 'border-amber-500/40'
+                          ? 'border-amber-400/45'
                           : sinStock
-                          ? 'border-rose-500/40 opacity-90'
-                          : 'border-border hover:border-zinc-700'
+                          ? 'border-rose-400/40 opacity-90'
+                          : 'border-[#323846] hover:border-zinc-500'
                       }`}
                     >
-                      <div>
+                      <div className="space-y-4">
                         {/* Header row: Photo + Badges */}
-                        <div className="flex items-start gap-3.5">
+                        <div className="flex items-start gap-4">
                           {allPhotos.length > 0 ? (
                             <button
                               type="button"
@@ -1392,7 +1376,7 @@ export default function BotiquinAppClient({
                                 setLightboxPhotos(allPhotos)
                                 setLightboxIndex(0)
                               }}
-                              className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-border bg-background relative group"
+                              className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[#323846] bg-[#0e1016] relative group"
                             >
                               <img
                                 src={allPhotos[0]}
@@ -1400,26 +1384,26 @@ export default function BotiquinAppClient({
                                 className="h-full w-full object-cover group-hover:scale-105 transition-transform"
                               />
                               {allPhotos.length > 1 && (
-                                <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-bold text-white flex items-center space-x-0.5">
+                                <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-bold text-white flex items-center">
                                   <Images className="h-2.5 w-2.5 mr-0.5" />
                                   <span>{allPhotos.length}</span>
                                 </span>
                               )}
                             </button>
                           ) : (
-                            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground">
+                            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-[#323846] bg-[#0e1016] text-muted-foreground">
                               {med.unidad === 'ml' || med.unidad === 'gotas' ? (
-                                <Droplets className="h-7 w-7 text-sky-400" />
+                                <Droplets className="h-6 w-6 text-sky-400" />
                               ) : (
-                                <Pill className="h-7 w-7 text-primary" />
+                                <Pill className="h-6 w-6 text-primary" />
                               )}
                             </div>
                           )}
 
                           <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                            <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                               {med.publico === 'pediatrico' ? (
-                                <span className="inline-flex items-center space-x-1 rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-400 border border-sky-500/30">
+                                <span className="inline-flex items-center space-x-1 rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-300 border border-sky-500/30">
                                   <Baby className="h-3 w-3" />
                                   <span>Pediátrico</span>
                                 </span>
@@ -1429,132 +1413,96 @@ export default function BotiquinAppClient({
                                   <span>Adultos</span>
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center space-x-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 border border-emerald-500/30">
+                                <span className="inline-flex items-center space-x-1 rounded-md bg-red-400/15 px-2 py-0.5 text-[11px] font-semibold text-red-300 border border-red-400/30">
                                   <Users className="h-3 w-3" />
-                                  <span>Familiar / Ambos</span>
+                                  <span>Ambos</span>
                                 </span>
                               )}
 
-                              <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground truncate max-w-[140px]">
+                              <span className="rounded-md bg-[#232733] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[130px]">
                                 {med.categoria}
                               </span>
                             </div>
 
-                            <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
-                              <span className="block truncate" title={med.nombre}>
-                                {med.nombre}
-                              </span>
-                              <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/nombre:block z-50 w-max max-w-[260px] rounded-lg border border-border bg-zinc-900/95 px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-xl whitespace-normal break-words">
-                                {med.nombre}
-                              </span>
+                            <h3
+                              className="text-base font-bold text-foreground leading-snug truncate"
+                              title={med.nombre}
+                            >
+                              {med.nombre}
                             </h3>
-                            <p className="text-xs text-muted-foreground truncate">
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">
                               {med.droga || 'Sin especificar'}{' '}
                               {med.concentracion ? `• ${med.concentracion}` : ''}
                             </p>
                           </div>
                         </div>
 
-                        {/* Stock Progress Bar & Quantity */}
-                        <div className="mt-4 rounded-xl bg-background/80 border border-border/70 p-3">
-                          <div className="flex items-center justify-between text-xs mb-1.5">
-                            <span className="text-muted-foreground font-medium">Disponibilidad:</span>
-                            <span
-                              className={`font-bold text-sm ${
-                                sinStock
-                                  ? 'text-red-400'
-                                  : med.cantidad_actual <= med.stock_minimo
-                                  ? 'text-amber-400'
-                                  : 'text-emerald-400'
-                              }`}
-                            >
-                              {med.cantidad_actual} / {med.cantidad_inicial} {med.unidad}
-                            </span>
-                          </div>
-                          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                            <div
-                              className={`h-full rounded-full transition-all ${
-                                sinStock
-                                  ? 'bg-red-500'
-                                  : med.cantidad_actual <= med.stock_minimo
-                                  ? 'bg-amber-500'
-                                  : 'bg-emerald-500'
-                              }`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-
-                          {/* Expiration Badge */}
-                          <div className="mt-2.5 flex items-center justify-between text-xs pt-2 border-t border-border/50">
-                            <span className="text-muted-foreground flex items-center space-x-1">
-                              <Calendar className="h-3.5 w-3.5" />
-                              <span>Vencimiento:</span>
-                            </span>
-                            {med.fecha_vencimiento ? (
-                              <span
-                                className={`font-semibold px-2 py-0.5 rounded-md ${
-                                  vencido
-                                    ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                                    : proximo
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-emerald-500/15 text-emerald-300'
-                                }`}
+                        {/* Single compact line: Disponibilidad: 75% | Vencimiento: 12/2027 */}
+                        <div
+                          className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3.5 py-2.5 text-xs flex items-center justify-between gap-2"
+                          title={`Cantidad actual: ${med.cantidad_actual} / ${med.cantidad_inicial} ${med.unidad}`}
+                        >
+                          <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+                            <span>
+                              <span className="text-muted-foreground">Disponibilidad:</span>{' '}
+                              <strong
+                                className={
+                                  sinStock
+                                    ? 'text-red-400'
+                                    : med.cantidad_actual <= med.stock_minimo
+                                    ? 'text-amber-400'
+                                    : 'text-foreground'
+                                }
                               >
-                                {med.fecha_vencimiento}{' '}
-                                {vencido
-                                  ? `(Vencido hace ${Math.abs(diasVenc!)}d)`
-                                  : diasVenc === 0
-                                  ? '(Vence HOY)'
-                                  : `(${diasVenc}d)`}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">No especificado</span>
-                            )}
+                                {pct}%
+                              </strong>
+                            </span>
+                            <span className="text-zinc-600">|</span>
+                            <span>
+                              <span className="text-muted-foreground">Vencimiento:</span>{' '}
+                              <strong
+                                className={
+                                  vencido
+                                    ? 'text-red-400'
+                                    : proximo
+                                    ? 'text-amber-400'
+                                    : 'text-foreground'
+                                }
+                              >
+                                {formatMesAnio(med.fecha_vencimiento)}
+                              </strong>
+                            </span>
                           </div>
                         </div>
 
-                        {/* Indications & Dosage */}
+                        {/* Indications & Dosage (Only native tooltip) */}
                         {(med.para_que_sirve || med.posologia_referencia) && (
-                          <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                          <div className="space-y-1.5 text-xs text-muted-foreground">
                             {med.para_que_sirve && (
-                              <p className="group/tip relative cursor-default">
-                                <span
-                                  className="line-clamp-2"
-                                  title={`Para qué sirve: ${med.para_que_sirve}`}
-                                >
-                                  <strong className="text-foreground/90">Para qué sirve:</strong>{' '}{med.para_que_sirve}
-  
-                                </span>
-                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-border bg-zinc-900/95 px-3 py-2 text-xs text-zinc-100 shadow-xl whitespace-normal break-words leading-relaxed">
-                                  <strong className="text-emerald-400">Para qué sirve:</strong>{' '}{med.para_que_sirve}
-  
-                                </span>
-
+                              <p
+                                className="truncate"
+                                title={`Para qué sirve: ${med.para_que_sirve}`}
+                              >
+                                <strong className="text-foreground/90">Para qué sirve:</strong>{' '}
+                                {sintomasResumidos}
                               </p>
                             )}
                             {med.posologia_referencia && (
-                              <p className="group/tip relative cursor-default">
-                                <span
-                                  className="line-clamp-2"
-                                  title={`Dosis ref.: ${med.posologia_referencia}`}
-                                >
-                                  <strong className="text-foreground/90">Dosis ref.:</strong>{' '}{med.posologia_referencia}
-  
-                                </span>
-                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-border bg-zinc-900/95 px-3 py-2 text-xs text-zinc-100 shadow-xl whitespace-normal break-words leading-relaxed">
-                                  <strong className="text-sky-400">Dosis ref.:</strong>{' '}{med.posologia_referencia}
-  
-                                </span>
-
+                              <p
+                                className="truncate"
+                                title={`Dosis recomendada: ${med.posologia_referencia}`}
+                              >
+                                <strong className="text-foreground/90">Dosis recomendada:</strong>{' '}
+                                {med.posologia_referencia}
                               </p>
                             )}
                           </div>
                         )}
                       </div>
 
-                      {/* Card Footer Actions */}
+                      {/* Card Footer Actions (1 word & grey) */}
                       {med.estado === 'activo' ? (
-                        <div className="mt-4 pt-3 border-t border-border flex items-center justify-between gap-1.5">
+                        <div className="mt-5 pt-3.5 border-t border-[#282d3a] flex items-center justify-between gap-2">
                           <button
                             type="button"
                             disabled={med.cantidad_actual <= 0}
@@ -1563,10 +1511,10 @@ export default function BotiquinAppClient({
                               setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
                               setDosisMotivo('')
                             }}
-                            className="flex-1 flex items-center justify-center space-x-1 rounded-lg bg-primary/15 border border-primary/30 px-2.5 py-2 text-xs font-semibold text-primary hover:bg-primary/25 disabled:opacity-40 transition-colors"
+                            className={`flex-1 flex items-center justify-center space-x-1.5 rounded-lg px-3 py-2 text-xs font-medium disabled:opacity-40 ${greyBtn}`}
                           >
                             <MinusCircle className="h-3.5 w-3.5" />
-                            <span>Usar Dosis</span>
+                            <span>Usar</span>
                           </button>
 
                           <button
@@ -1576,10 +1524,10 @@ export default function BotiquinAppClient({
                               setReponerCantidad(med.cantidad_inicial || 10)
                               setReponerVencimiento(med.fecha_vencimiento || '')
                             }}
-                            title="Reponer / Sumar Stock"
-                            className="flex items-center justify-center space-x-1 rounded-lg border border-border bg-background px-2.5 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                            title="Reponer Stock"
+                            className={`flex-1 flex items-center justify-center space-x-1.5 rounded-lg px-3 py-2 text-xs font-medium ${greyBtn}`}
                           >
-                            <PlusCircle className="h-3.5 w-3.5 text-emerald-400" />
+                            <PlusCircle className="h-3.5 w-3.5" />
                             <span>Reponer</span>
                           </button>
 
@@ -1587,7 +1535,7 @@ export default function BotiquinAppClient({
                             type="button"
                             onClick={() => openEditMedModal(med)}
                             title="Editar"
-                            className="p-2 rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                            className={`p-2 rounded-lg ${greyBtn}`}
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -1599,15 +1547,15 @@ export default function BotiquinAppClient({
                               setBajaMotivo(vencido ? 'vencido' : 'tirado')
                               setBajaDetalle('')
                             }}
-                            title="Dar de baja el producto completo (vencido / tirado / perdido)"
-                            className="p-2 rounded-lg border border-red-500/25 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                            title="Dar de baja"
+                            className={`p-2 rounded-lg ${greyBtn}`}
                           >
                             <ArchiveX className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       ) : (
-                        <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs">
-                          <span className="text-red-400 font-medium">
+                        <div className="mt-5 pt-3.5 border-t border-[#282d3a] flex items-center justify-between text-xs">
+                          <span className="text-red-300 font-medium">
                             Baja ({med.motivo_baja || 'descartado'})
                           </span>
                           <div className="flex items-center space-x-2">
@@ -1617,13 +1565,13 @@ export default function BotiquinAppClient({
                                 setReponerCantidad(med.cantidad_inicial || 10)
                                 setReponerVencimiento('')
                               }}
-                              className="text-emerald-400 hover:underline font-medium"
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
                             >
-                              Reactivar / Reponer
+                              Reactivar
                             </button>
                             <button
                               onClick={() => handleDeletePermanent(med.id, med.nombre)}
-                              className="text-red-400 hover:underline"
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
                             >
                               Eliminar
                             </button>
@@ -1643,24 +1591,21 @@ export default function BotiquinAppClient({
         {/* ================================================================= */}
         {activeTab === 'consulta' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left Column: Patient Selector & Quick Prompts */}
+            {/* Left Column: Patient Selector */}
             <div className="space-y-4">
-              <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-                <div className="flex items-center space-x-2.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary">
+              <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-6 space-y-5">
+                <div className="flex items-center space-x-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/30">
                     <Bot className="h-5 w-5" />
                   </div>
                   <div>
                     <h2 className="text-base font-bold text-foreground">
-                      Consultorio de Botiquín IA
+                      Consultorio IA
                     </h2>
-                    <p className="text-xs text-muted-foreground">
-                      Conectado en tiempo real a tu stock ({kpis.totalVigentes} vigentes)
-                    </p>
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     ¿Para quién es la consulta?
                   </label>
@@ -1668,33 +1613,27 @@ export default function BotiquinAppClient({
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('auto')}
-                      className={`py-2 px-2 rounded-lg text-xs font-medium border transition-colors ${
-                        pacienteTipo === 'auto'
-                          ? 'bg-primary/15 border-primary text-primary'
-                          : 'bg-background border-border text-muted-foreground'
+                      className={`py-2 px-2 rounded-lg text-xs font-medium ${
+                        pacienteTipo === 'auto' ? greyBtnActive : greyBtn
                       }`}
                     >
-                      Automático
+                      Auto
                     </button>
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('pediatrico')}
-                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium border transition-colors ${
-                        pacienteTipo === 'pediatrico'
-                          ? 'bg-sky-500/20 border-sky-400 text-sky-300'
-                          : 'bg-background border-border text-muted-foreground'
+                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium ${
+                        pacienteTipo === 'pediatrico' ? greyBtnActive : greyBtn
                       }`}
                     >
                       <Baby className="h-3.5 w-3.5" />
-                      <span>Bebé / Niño</span>
+                      <span>Pediátrico</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('adulto')}
-                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium border transition-colors ${
-                        pacienteTipo === 'adulto'
-                          ? 'bg-violet-500/20 border-violet-400 text-violet-300'
-                          : 'bg-background border-border text-muted-foreground'
+                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium ${
+                        pacienteTipo === 'adulto' ? greyBtnActive : greyBtn
                       }`}
                     >
                       <User className="h-3.5 w-3.5" />
@@ -1703,61 +1642,35 @@ export default function BotiquinAppClient({
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <label className="text-xs font-medium text-muted-foreground">
-                    Edad / Peso aproximado (opcional, muy útil para bebés):
+                    Edad / Peso aproximado (opcional):
                   </label>
                   <input
                     type="text"
                     value={edadPesoDetalle}
                     onChange={(e) => setEdadPesoDetalle(e.target.value)}
-                    placeholder="Ej: Bebé de 11 meses, pesa 9.5 kg"
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
+                    placeholder="Ej: Bebé de 11 meses, 9.5 kg"
+                    className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3.5 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
                   />
-                </div>
-
-                <div className="pt-2 border-t border-border space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
-                    Consultas frecuentes en 1 clic:
-                  </span>
-                  <div className="flex flex-col gap-2">
-                    {[
-                      'Me duele la espalda, de mi stock ¿qué puedo tomar?',
-                      'El bebé no para de vomitar, ¿qué le doy?',
-                      'El bebé tiene 38.5°C de fiebre, ¿qué tengo en stock para darle?',
-                      'Me duele fuerte la cabeza y tengo malestar, ¿qué puedo tomar?',
-                      'Tengo dolor de panza / acidez estomacal, ¿qué hay en mi botiquín?',
-                    ].map((ejemplo) => (
-                      <button
-                        key={ejemplo}
-                        type="button"
-                        onClick={() => handleSendConsulta(ejemplo)}
-                        disabled={consultingAI}
-                        className="text-left text-xs rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-muted/60 px-3 py-2.5 text-foreground transition-colors"
-                      >
-                        &ldquo;{ejemplo}&rdquo;
-                      </button>
-                    ))}
-                  </div>
                 </div>
               </div>
             </div>
 
             {/* Right 2 Columns: Chat & Structured Recommendations */}
-            <div className="lg:col-span-2 flex flex-col rounded-2xl border border-border bg-card overflow-hidden min-h-[560px]">
+            <div className="lg:col-span-2 flex flex-col rounded-2xl border border-[#323846] bg-[#171a22] overflow-hidden min-h-[520px]">
               {/* Chat Messages Area */}
-              <div className="flex-1 p-4 md:p-6 space-y-5 overflow-y-auto max-h-[640px]">
+              <div className="flex-1 p-5 md:p-6 space-y-5 overflow-y-auto max-h-[600px]">
                 {chatMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center py-14 px-4">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/15 text-primary border border-primary/30 mb-4">
-                      <Sparkles className="h-8 w-8" />
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary border border-primary/30 mb-4">
+                      <Sparkles className="h-7 w-7" />
                     </div>
                     <h3 className="text-lg font-bold text-foreground">
                       Hacé tu consulta médica sobre tu Botiquín
                     </h3>
                     <p className="mt-2 text-sm text-muted-foreground max-w-md">
-                      Escribí qué síntoma tenés vos o el bebé. La IA revisará tus{' '}
-                      <strong>{kpis.totalVigentes} medicamentos vigentes en stock</strong>, te dirá qué podés usar y, si no tenés nada disponible, te sugerirá qué comprar.
+                      Escribí qué síntoma tenés vos o el bebé para revisar qué medicamentos vigentes tenés en stock.
                     </p>
                   </div>
                 ) : (
@@ -1771,8 +1684,8 @@ export default function BotiquinAppClient({
                       <div
                         className={`max-w-2xl rounded-2xl p-4 ${
                           msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-background border border-border text-foreground w-full'
+                            ? 'bg-zinc-800 border border-zinc-600 text-zinc-100'
+                            : 'bg-[#0e1016] border border-[#2d3342] text-foreground w-full'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3 mb-1.5 text-[11px] opacity-75">
@@ -1792,32 +1705,32 @@ export default function BotiquinAppClient({
 
                         {/* Structured AI Sections */}
                         {msg.aiData && (
-                          <div className="mt-4 space-y-4 pt-4 border-t border-border">
+                          <div className="mt-4 space-y-4 pt-4 border-t border-[#2d3342]">
                             {/* 1. Recomendados de tu stock */}
                             {msg.aiData.recomendados_del_stock.length > 0 ? (
                               <div className="space-y-2.5">
-                                <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center space-x-1.5">
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-red-300 flex items-center space-x-1.5">
                                   <CheckCircle2 className="h-4 w-4" />
-                                  <span>Disponible en tu Stock para este malestar:</span>
+                                  <span>Disponible en tu Stock:</span>
                                 </h4>
                                 <div className="grid grid-cols-1 gap-2.5">
                                   {msg.aiData.recomendados_del_stock.map((rec) => (
                                     <div
                                       key={rec.id}
-                                      className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                      className="rounded-xl border border-[#363d4f] bg-[#171a22] p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                                     >
                                       <div>
-                                        <div className="font-bold text-sm text-emerald-200">
+                                        <div className="font-bold text-sm text-foreground">
                                           {rec.nombre}{' '}
-                                          <span className="text-xs font-normal text-emerald-300/80">
+                                          <span className="text-xs font-normal text-muted-foreground">
                                             ({rec.droga})
                                           </span>
                                         </div>
                                         <div className="text-xs text-zinc-300 mt-1">
-                                          <strong>Dosis orientativa:</strong> {rec.dosis_sugerida}
+                                          <strong>Dosis recomendada:</strong> {rec.dosis_sugerida}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5">
-                                          {rec.motivo} • Stock disponible:{' '}
+                                          {rec.motivo} • Stock:{' '}
                                           <strong>
                                             {rec.cantidad_actual} {rec.unidad}
                                           </strong>
@@ -1833,13 +1746,10 @@ export default function BotiquinAppClient({
                                             rec.nombre
                                           )
                                         }
-                                        className="shrink-0 flex items-center justify-center space-x-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-zinc-950 hover:bg-emerald-400 transition-colors"
+                                        className={`shrink-0 flex items-center justify-center space-x-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold ${greyBtn}`}
                                       >
                                         <MinusCircle className="h-3.5 w-3.5" />
-                                        <span>
-                                          Descontar dosis (-{rec.cantidad_descontar_sugerida || 1}{' '}
-                                          {rec.unidad})
-                                        </span>
+                                        <span>Descontar</span>
                                       </button>
                                     </div>
                                   ))}
@@ -1850,18 +1760,17 @@ export default function BotiquinAppClient({
                                 <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
                                 <div className="text-xs text-amber-200">
                                   <strong>No tenés medicamentos vigentes en tu stock</strong> para
-                                  tratar específicamente este malestar. Mirá abajo las sugerencias
-                                  para comprar en la farmacia.
+                                  tratar específicamente este malestar.
                                 </div>
                               </div>
                             )}
 
                             {/* 2. Advertencias de medicamentos vencidos o sin stock */}
                             {msg.aiData.advertencias_stock.length > 0 && (
-                              <div className="rounded-xl border border-red-500/40 bg-red-950/25 p-3.5 space-y-1.5">
-                                <h4 className="text-xs font-bold uppercase tracking-wider text-red-400 flex items-center space-x-1.5">
+                              <div className="rounded-xl border border-red-400/40 bg-red-950/25 p-3.5 space-y-1.5">
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-red-300 flex items-center space-x-1.5">
                                   <ShieldAlert className="h-4 w-4" />
-                                  <span>Atención en tu Botiquín (Vencidos / Agotados):</span>
+                                  <span>Atención en tu Botiquín (Vencidos / Sin Stock):</span>
                                 </h4>
                                 <ul className="list-disc list-inside text-xs text-red-200 space-y-1">
                                   {msg.aiData.advertencias_stock.map((adv, i) => (
@@ -1876,7 +1785,7 @@ export default function BotiquinAppClient({
                               <div className="space-y-2">
                                 <h4 className="text-xs font-bold uppercase tracking-wider text-sky-400 flex items-center space-x-1.5">
                                   <ShoppingBag className="h-4 w-4" />
-                                  <span>Sugerencias adicionales para comprar en Farmacia:</span>
+                                  <span>Sugerencias para comprar en Farmacia:</span>
                                 </h4>
                                 <div className="grid grid-cols-1 gap-2">
                                   {msg.aiData.sugerencias_compra.map((sug, i) => (
@@ -1893,7 +1802,7 @@ export default function BotiquinAppClient({
                                       <p className="text-zinc-300 mt-1">{sug.motivo}</p>
                                       {sug.presentacion_sugerida && (
                                         <p className="text-muted-foreground mt-0.5">
-                                          Presentación sugerida: {sug.presentacion_sugerida}
+                                          Presentación: {sug.presentacion_sugerida}
                                         </p>
                                       )}
                                     </div>
@@ -1904,7 +1813,7 @@ export default function BotiquinAppClient({
 
                             {/* 4. Pautas de alarma */}
                             {msg.aiData.pautas_alarma.length > 0 && (
-                              <div className="rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
+                              <div className="rounded-xl border border-[#323846] bg-[#171a22] p-3 text-xs text-muted-foreground">
                                 <strong className="text-foreground block mb-1">
                                   🩺 Cuándo consultar al médico / guardia:
                                 </strong>
@@ -1923,11 +1832,9 @@ export default function BotiquinAppClient({
                 )}
 
                 {consultingAI && (
-                  <div className="flex items-center space-x-3 rounded-2xl border border-border bg-background p-4 text-sm text-muted-foreground">
+                  <div className="flex items-center space-x-3 rounded-2xl border border-[#323846] bg-[#0e1016] p-4 text-sm text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                    <span>
-                      Analizando tu stock disponible, fechas de vencimiento y recomendaciones médicas...
-                    </span>
+                    <span>Analizando tu stock disponible...</span>
                   </div>
                 )}
               </div>
@@ -1938,26 +1845,26 @@ export default function BotiquinAppClient({
                   e.preventDefault()
                   handleSendConsulta()
                 }}
-                className="border-t border-border bg-background p-3 md:p-4 flex items-center gap-2"
+                className="border-t border-[#323846] bg-[#11131a] p-4 flex items-center gap-3"
               >
                 <input
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder='Ej: "Me duele la espalda, ¿qué puedo tomar?" o "El bebé no para de vomitar, ¿qué le doy?"'
-                  className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground focus:border-primary focus:outline-none"
+                  placeholder="Escribí tu consulta o síntoma..."
+                  className="flex-1 rounded-xl border border-[#343a48] bg-[#171a22] px-4 py-3 text-sm text-foreground focus:border-primary focus:outline-none"
                 />
                 <button
                   type="submit"
                   disabled={consultingAI || !chatInput.trim()}
-                  className="flex items-center space-x-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  className={`flex items-center space-x-2 rounded-xl px-5 py-3 text-sm font-semibold disabled:opacity-50 ${greyBtn}`}
                 >
                   {consultingAI ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Send className="h-4 w-4" />
                   )}
-                  <span className="hidden sm:inline">Consultar</span>
+                  <span>Consultar</span>
                 </button>
               </form>
             </div>
@@ -1965,31 +1872,30 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 3: PRIMERA NECESIDAD (ESENCIALES)                             */}
+        {/* TAB 3: ESENCIALES                                                 */}
         {/* ================================================================= */}
         {activeTab === 'esenciales' && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-border bg-card p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border border-[#323846] bg-[#171a22] p-6">
               <div>
                 <h2 className="text-xl font-bold text-foreground flex items-center space-x-2">
-                  <Star className="h-5 w-5 text-violet-400" />
-                  <span>Productos de Primera Necesidad (Esenciales)</span>
+                  <Star className="h-5 w-5 text-primary" />
+                  <span>Esenciales</span>
                 </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Lista predefinida y editable por vos. Cuando un esencial no está cubierto por ningún medicamento vigente en tu stock, el sistema genera alerta y te envía un email a{' '}
+                  Lista de medicamentos de primera necesidad. Cuando falta alguno, el sistema alerta a{' '}
                   <strong>{state.config.email_alertas}</strong>.
                 </p>
               </div>
               <button
                 onClick={openNewEsencialModal}
-                className="shrink-0 flex items-center justify-center space-x-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+                className={`shrink-0 flex items-center justify-center space-x-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold ${greyBtn}`}
               >
-                <Plus className="h-4 w-4" />
-                <span>Agregar Esencial</span>
+                <span>+ Esencial</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {state.esenciales.map((esc) => {
                 const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
                   esc,
@@ -1998,30 +1904,30 @@ export default function BotiquinAppClient({
                 return (
                   <div
                     key={esc.id}
-                    className={`rounded-2xl border bg-card p-5 flex flex-col justify-between transition-colors ${
+                    className={`rounded-2xl border bg-[#171a22] p-5 flex flex-col justify-between transition-colors ${
                       !esc.activo
-                        ? 'border-border opacity-60'
+                        ? 'border-[#2c313f] opacity-60'
                         : cubierto
-                        ? 'border-emerald-500/35'
-                        : 'border-red-500/45 bg-red-950/10'
+                        ? 'border-[#323846]'
+                        : 'border-red-400/45'
                     }`}
                   >
                     <div>
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
                           {cubierto ? (
-                            <span className="inline-flex items-center space-x-1 rounded-md bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-400 border border-emerald-500/30">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              <span>Cubierto en Stock</span>
+                            <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800 px-2.5 py-0.5 text-xs font-semibold text-zinc-200 border border-zinc-600">
+                              <CheckCircle2 className="h-3.5 w-3.5 text-red-300" />
+                              <span>Cubierto</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center space-x-1 rounded-md bg-red-500/20 px-2.5 py-0.5 text-xs font-semibold text-red-300 border border-red-500/35">
+                            <span className="inline-flex items-center space-x-1 rounded-md bg-red-500/20 px-2.5 py-0.5 text-xs font-semibold text-red-300 border border-red-400/35">
                               <AlertTriangle className="h-3.5 w-3.5" />
-                              <span>FALTANTE</span>
+                              <span>Faltante</span>
                             </span>
                           )}
 
-                          <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                          <span className="rounded-md bg-[#232733] px-2 py-0.5 text-xs text-zinc-300">
                             {esc.publico === 'pediatrico'
                               ? '👶 Pediátrico'
                               : esc.publico === 'adulto'
@@ -2030,18 +1936,18 @@ export default function BotiquinAppClient({
                           </span>
                         </div>
 
-                        <div className="flex items-center space-x-1">
+                        <div className="flex items-center space-x-1.5">
                           <button
                             onClick={() => openEditEsencialModal(esc)}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
-                            title="Editar esencial"
+                            className={`p-1.5 rounded-lg ${greyBtn}`}
+                            title="Editar"
                           >
                             <Edit3 className="h-4 w-4" />
                           </button>
                           <button
                             onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-muted"
-                            title="Eliminar esencial"
+                            className={`p-1.5 rounded-lg ${greyBtn}`}
+                            title="Eliminar"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -2057,15 +1963,15 @@ export default function BotiquinAppClient({
                       )}
 
                       {cubierto ? (
-                        <div className="mt-3 rounded-xl bg-emerald-950/25 border border-emerald-500/25 p-2.5 text-xs text-emerald-200">
+                        <div className="mt-3 rounded-xl bg-[#0e1016] border border-[#2c313f] p-3 text-xs text-zinc-300">
                           <strong>Cubierto por:</strong>{' '}
                           {medicamentosQueCubren
                             .map((m) => `${m.nombre} (${m.cantidad_actual} ${m.unidad})`)
                             .join(', ')}
                         </div>
                       ) : (
-                        <div className="mt-3 flex items-center justify-between rounded-xl bg-red-950/25 border border-red-500/25 p-2.5 text-xs text-red-200">
-                          <span>No hay ningún producto activo y en fecha que lo cubra.</span>
+                        <div className="mt-3 flex items-center justify-between rounded-xl bg-red-950/20 border border-red-400/30 p-3 text-xs text-red-200">
+                          <span>Sin stock vigente que lo cubra.</span>
                           <button
                             onClick={() =>
                               openNewMedModal({
@@ -2080,24 +1986,12 @@ export default function BotiquinAppClient({
                                 esencial_id: esc.id,
                               })
                             }
-                            className="ml-2 shrink-0 rounded-lg bg-primary px-2.5 py-1 text-xs font-bold text-primary-foreground"
+                            className={`ml-2 shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
                           >
-                            + Cargar al Stock
+                            + Stock
                           </button>
                         </div>
                       )}
-                    </div>
-
-                    <div className="mt-3 pt-2 border-t border-border/60 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-                      <span>Palabras clave de detección:</span>
-                      {esc.keywords.map((kw) => (
-                        <span
-                          key={kw}
-                          className="rounded bg-background border border-border px-1.5 py-0.5"
-                        >
-                          {kw}
-                        </span>
-                      ))}
                     </div>
                   </div>
                 )
@@ -2107,58 +2001,56 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 4: ALERTAS, HISTORIAL Y CONFIGURACIÓN                         */}
+        {/* TAB 4: ALERTAS                                                    */}
         {/* ================================================================= */}
         {activeTab === 'alertas' && (
           <div className="space-y-6">
             {/* Active Alerts & Manual Email Trigger */}
-            <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
+            <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-6 space-y-5">
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <h2 className="text-xl font-bold text-foreground flex items-center space-x-2">
                     <Bell className="h-5 w-5 text-primary" />
-                    <span>Centro de Alertas por Email ({alertas.length} activas)</span>
+                    <span>Alertas por Email</span>
                   </h2>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Se envía un correo automático a{' '}
-                    <strong className="text-foreground">{state.config.email_alertas}</strong> ante:
-                    Producto próximo a vencer, Producto vencido, Primera necesidad faltante o
-                    Producto sin stock.
+                    Destinatario configurado:{' '}
+                    <strong className="text-foreground">{state.config.email_alertas}</strong>
                   </p>
                 </div>
 
                 <button
                   onClick={handleSendEmailAlertsNow}
                   disabled={sendingEmailNow}
-                  className="shrink-0 flex items-center justify-center space-x-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  className={`shrink-0 flex items-center justify-center space-x-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:opacity-50 ${greyBtn}`}
                 >
                   {sendingEmailNow ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Mail className="h-4 w-4" />
                   )}
-                  <span>Enviar Reporte por Email Ahora</span>
+                  <span>Enviar</span>
                 </button>
               </div>
 
               {alertas.length === 0 ? (
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/15 p-6 text-center">
-                  <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-400 mb-2" />
-                  <p className="text-sm font-semibold text-emerald-200">
-                    ¡Todo en orden! No hay medicamentos vencidos, próximos a vencer ni faltantes.
+                <div className="rounded-xl border border-[#2c313f] bg-[#0e1016] p-6 text-center">
+                  <CheckCircle2 className="mx-auto h-8 w-8 text-primary mb-2" />
+                  <p className="text-sm font-semibold text-zinc-200">
+                    ¡Todo en orden! No hay alertas pendientes.
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   {alertas.map((a, idx) => (
                     <div
                       key={idx}
-                      className={`rounded-xl border p-3.5 ${
+                      className={`rounded-xl border p-4 ${
                         a.tipo === 'vencido' || a.tipo === 'sin_stock'
-                          ? 'border-red-500/40 bg-red-950/15'
+                          ? 'border-red-400/40 bg-red-950/15'
                           : a.tipo === 'proximo_vencer'
-                          ? 'border-amber-500/40 bg-amber-950/15'
-                          : 'border-violet-500/40 bg-violet-950/15'
+                          ? 'border-amber-400/40 bg-amber-950/15'
+                          : 'border-red-300/35 bg-red-950/10'
                       }`}
                     >
                       <div className="text-sm font-bold text-foreground">{a.titulo}</div>
@@ -2174,11 +2066,11 @@ export default function BotiquinAppClient({
               {/* Settings Form */}
               <form
                 onSubmit={handleSaveConfig}
-                className="rounded-2xl border border-border bg-card p-5 space-y-4"
+                className="rounded-2xl border border-[#323846] bg-[#171a22] p-6 space-y-4"
               >
                 <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
                   <Settings className="h-4 w-4 text-primary" />
-                  <span>Configuración de Reglas y Notificaciones</span>
+                  <span>Configuración</span>
                 </h3>
 
                 <div className="space-y-1.5">
@@ -2192,13 +2084,13 @@ export default function BotiquinAppClient({
                     onChange={(e) =>
                       setConfigForm({ ...configForm, email_alertas: e.target.value })
                     }
-                    className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm text-foreground"
+                    className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3.5 py-2 text-sm text-foreground"
                   />
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-foreground">
-                    Umbral de &ldquo;Próximo a vencer&rdquo; (días antes de la fecha de vencimiento):
+                    Días de anticipación para &ldquo;Próximo a vencer&rdquo;:
                   </label>
                   <input
                     type="number"
@@ -2211,13 +2103,13 @@ export default function BotiquinAppClient({
                         dias_proximo_vencer: Number(e.target.value || 30),
                       })
                     }
-                    className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm text-foreground"
+                    className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3.5 py-2 text-sm text-foreground"
                   />
                 </div>
 
                 <div className="space-y-2.5 pt-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
-                    Escenarios que disparan mail automático:
+                    Alertas automáticas:
                   </span>
                   {[
                     {
@@ -2230,11 +2122,11 @@ export default function BotiquinAppClient({
                     },
                     {
                       key: 'alertar_esencial_faltante',
-                      label: '⭐ Producto de primera necesidad faltante',
+                      label: '⭐ Producto esencial faltante',
                     },
                     {
                       key: 'alertar_sin_stock',
-                      label: '📦 Producto sin stock (0 disponibles)',
+                      label: '📦 Producto sin stock',
                     },
                   ].map((item) => (
                     <label
@@ -2250,7 +2142,7 @@ export default function BotiquinAppClient({
                             [item.key]: e.target.checked,
                           })
                         }
-                        className="h-4 w-4 rounded border-border accent-emerald-500"
+                        className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
                       />
                       <span>{item.label}</span>
                     </label>
@@ -2260,17 +2152,17 @@ export default function BotiquinAppClient({
                 <button
                   type="submit"
                   disabled={savingConfig}
-                  className="w-full rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+                  className={`w-full rounded-xl px-4 py-2.5 text-sm font-semibold ${greyBtn}`}
                 >
-                  {savingConfig ? 'Guardando...' : 'Guardar Configuración'}
+                  {savingConfig ? 'Guardando...' : 'Guardar'}
                 </button>
               </form>
 
-              {/* Movements & Sent Emails Log */}
-              <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
+              {/* Movements Log */}
+              <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-6 space-y-4">
                 <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
                   <History className="h-4 w-4 text-primary" />
-                  <span>Últimos Movimientos de Stock y Consumos</span>
+                  <span>Últimos Movimientos</span>
                 </h3>
 
                 {state.movimientos.length === 0 ? (
@@ -2282,7 +2174,7 @@ export default function BotiquinAppClient({
                     {state.movimientos.slice(0, 30).map((mov) => (
                       <div
                         key={mov.id}
-                        className="rounded-xl border border-border bg-background p-3 flex items-center justify-between text-xs"
+                        className="rounded-xl border border-[#2c313f] bg-[#0e1016] p-3 flex items-center justify-between text-xs"
                       >
                         <div>
                           <div className="font-semibold text-foreground">
@@ -2290,11 +2182,11 @@ export default function BotiquinAppClient({
                             <span
                               className={`ml-1 px-1.5 py-0.5 rounded text-[10px] uppercase ${
                                 mov.tipo === 'alta' || mov.tipo === 'reposicion'
-                                  ? 'bg-emerald-500/20 text-emerald-300'
+                                  ? 'bg-red-400/20 text-red-300'
                                   : mov.tipo === 'consumo'
                                   ? 'bg-sky-500/20 text-sky-300'
                                   : mov.tipo === 'baja'
-                                  ? 'bg-red-500/20 text-red-300'
+                                  ? 'bg-rose-500/20 text-rose-300'
                                   : 'bg-zinc-700 text-zinc-300'
                               }`}
                             >
@@ -2324,7 +2216,7 @@ export default function BotiquinAppClient({
       </main>
 
       {/* Mobile Bottom Navigation Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-card/95 backdrop-blur px-2 py-1.5 grid grid-cols-4 gap-1">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 grid grid-cols-4 gap-1">
         <button
           onClick={() => setActiveTab('stock')}
           className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
@@ -2332,7 +2224,7 @@ export default function BotiquinAppClient({
           }`}
         >
           <Package className="h-5 w-5 mb-0.5" />
-          <span>Mi Stock</span>
+          <span>Stock</span>
         </button>
 
         <button
@@ -2342,7 +2234,7 @@ export default function BotiquinAppClient({
           }`}
         >
           <Bot className="h-5 w-5 mb-0.5" />
-          <span>Consulta IA</span>
+          <span>Consultorio IA</span>
         </button>
 
         <button
@@ -2363,496 +2255,365 @@ export default function BotiquinAppClient({
         >
           <Bell className="h-5 w-5 mb-0.5" />
           <span>Alertas</span>
-          {alertas.length > 0 && (
-            <span className="absolute top-1 right-4 h-4 min-w-4 rounded-full bg-red-500 px-1 text-[10px] font-bold text-white flex items-center justify-center">
-              {alertas.length}
-            </span>
-          )}
         </button>
       </div>
 
       {/* ===================================================================== */}
-      {/* MODAL: ADD / EDIT MEDICAMENTO (MULTI-FOTO + AUTO / HÍBRIDO / MANUAL)  */}
+      {/* MODAL: ADD / EDIT MEDICAMENTO (COMPACT WITH 3 TABS)                   */}
       {/* ===================================================================== */}
       {medModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-2xl border border-border bg-card p-5 md:p-6 shadow-2xl my-8 max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-4 border-b border-border">
-              <div>
-                <h2 className="text-lg font-bold text-foreground">
-                  {editingMed ? 'Editar Medicamento' : 'Alta de Medicamento en el Botiquín'}
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  Podés subir 1 o más fotos para autocompletar con IA (modo híbrido) o cargar todo manualmente.
-                </p>
-              </div>
+        <div
+          onClick={() => setMedModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
+              <h2 className="text-base font-bold text-foreground">
+                {editingMed ? 'Editar Medicamento' : 'Nuevo Medicamento'}
+              </h2>
               <button
+                type="button"
                 onClick={() => setMedModalOpen(false)}
-                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+                className={`p-1.5 rounded-lg ${greyBtn}`}
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* Mode Selector Tabs: Automático/Híbrido con IA vs Carga Manual */}
-            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-background p-1.5 border border-border">
-              <button
-                type="button"
-                onClick={() => setModoCarga('hibrido_ia')}
-                className={`flex items-center justify-center space-x-2 rounded-lg py-2 px-3 text-xs font-semibold transition-colors ${
-                  modoCarga === 'hibrido_ia'
-                    ? 'bg-primary text-primary-foreground shadow'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <Sparkles className="h-4 w-4" />
-                <span>Automático / Híbrido (Fotos + IA)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setModoCarga('manual')}
-                className={`flex items-center justify-center space-x-2 rounded-lg py-2 px-3 text-xs font-semibold transition-colors ${
-                  modoCarga === 'manual'
-                    ? 'bg-zinc-800 text-foreground border border-zinc-700 shadow'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <PenTool className="h-4 w-4" />
-                <span>Carga Manual (Con o sin fotos)</span>
-              </button>
+            {/* 3 Section Tabs: General | Stock | Uso */}
+            <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-[#14171f] p-1.5 border border-[#363c4b]">
+              {[
+                { id: 'general', label: 'General' },
+                { id: 'stock', label: 'Stock' },
+                { id: 'uso', label: 'Uso' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setMedModalTab(t.id as MedModalTab)}
+                  className={`py-2 px-3 rounded-lg text-xs font-semibold transition-colors ${
+                    medModalTab === t.id
+                      ? greyBtnActive
+                      : 'text-zinc-400 hover:text-zinc-100'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
 
-            <form onSubmit={handleSaveMedicamento} className="mt-4 space-y-4">
-              {/* Multi-Photo Upload & AI Vision Box */}
-              <div
-                className={`rounded-xl border border-dashed p-4 space-y-3 ${
-                  modoCarga === 'hibrido_ia'
-                    ? 'border-primary/40 bg-primary/5'
-                    : 'border-border bg-background/40'
-                }`}
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-start space-x-3">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                      <Images className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-semibold text-foreground">
-                        Fotos del Medicamento ({medForm.fotos_input.length} cargada
-                        {medForm.fotos_input.length === 1 ? '' : 's'})
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {modoCarga === 'hibrido_ia'
-                          ? 'Subí 1 o más fotos (ej: frente de la caja + solapa de vencimiento). Lo que no se vea en la foto te lo pediremos completar abajo.'
-                          : 'Opcional: podés adjuntar 1 o más fotos del envase y escribir los datos manualmente abajo.'}
-                      </p>
-                    </div>
-                  </div>
+            <form onSubmit={handleSaveMedicamento} className="mt-4">
+              {/* TAB 1: GENERAL */}
+              {medModalTab === 'general' && (
+                <div className="space-y-4">
+                  {/* Compact Photo & AI Bar */}
+                  <div className="rounded-xl border border-[#383f4e] bg-[#161922] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-zinc-300">
+                        Fotos ({medForm.fotos_input.length})
+                      </span>
 
-                  {/* Hidden File Inputs: 1 for Camera Capture, 1 for Multi-File Gallery */}
-                  <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleMultiplePhotosSelected}
-                    className="hidden"
-                  />
-                  <input
-                    ref={galleryInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={handleMultiplePhotosSelected}
-                    className="hidden"
-                  />
+                      <input
+                        ref={cameraInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={handleMultiplePhotosSelected}
+                        className="hidden"
+                      />
+                      <input
+                        ref={galleryInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={handleMultiplePhotosSelected}
+                        className="hidden"
+                      />
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => cameraInputRef.current?.click()}
-                      disabled={analyzingPhoto}
-                      className="flex items-center space-x-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                    >
-                      <Camera className="h-3.5 w-3.5" />
-                      <span>Sacar Foto</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => galleryInputRef.current?.click()}
-                      disabled={analyzingPhoto}
-                      className="flex items-center space-x-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
-                    >
-                      <Plus className="h-3.5 w-3.5 text-primary" />
-                      <span>Subir 1 o más Fotos</span>
-                    </button>
-
-                    {medForm.fotos_input.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => analyzePhotosWithAI()}
-                        disabled={analyzingPhoto}
-                        className="flex items-center space-x-1 rounded-xl border border-primary/40 bg-background px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
-                      >
-                        {analyzingPhoto ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            <span>Analizando...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5" />
-                            <span>
-                              Analizar {medForm.fotos_input.length} foto(s) con IA
-                            </span>
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Thumbnails Gallery of Uploaded Photos */}
-                {medForm.fotos_input.length > 0 && (
-                  <div className="flex items-center gap-2.5 overflow-x-auto pt-2 border-t border-border/60">
-                    {medForm.fotos_input.map((imgSrc, idx) => (
-                      <div
-                        key={idx}
-                        className="relative h-20 w-20 shrink-0 rounded-xl overflow-hidden border border-border bg-background group"
-                      >
-                        <img
-                          src={imgSrc}
-                          alt={`Foto ${idx + 1}`}
-                          className="h-full w-full object-cover"
-                        />
-                        <span className="absolute bottom-1 left-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                          #{idx + 1}
-                        </span>
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => handleRemovePhotoAtIndex(idx)}
-                          title="Quitar esta foto"
-                          className="absolute top-1 right-1 rounded-full bg-red-600/90 p-1 text-white hover:bg-red-500"
+                          onClick={() => cameraInputRef.current?.click()}
+                          disabled={analyzingPhoto}
+                          className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-medium ${greyBtn}`}
                         >
-                          <X className="h-3 w-3" />
+                          <Camera className="h-3.5 w-3.5" />
+                          <span>Cámara</span>
                         </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
-                {analyzingPhoto && (
-                  <div className="flex items-center space-x-2.5 rounded-xl bg-primary/10 border border-primary/30 p-3 text-xs text-primary">
-                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    <span>
-                      Gemini Vision está leyendo tus {medForm.fotos_input.length} foto(s) para extraer nombre, droga, vencimiento y posología...
-                    </span>
-                  </div>
-                )}
+                        <button
+                          type="button"
+                          onClick={() => galleryInputRef.current?.click()}
+                          disabled={analyzingPhoto}
+                          className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-medium ${greyBtn}`}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>Fotos</span>
+                        </button>
 
-                {/* Hybrid AI Report Banner: Shows what was found and what needs manual entry */}
-                {!analyzingPhoto && (aiHybridMessage || aiMissingFields.length > 0) && (
-                  <div className="rounded-xl border border-amber-500/40 bg-amber-950/25 p-3.5 space-y-2">
-                    <div className="flex items-start space-x-2">
-                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-                      <div className="text-xs text-amber-100">
-                        <strong className="block text-amber-300">
-                          Modo Híbrido (Foto + Carga Manual):
-                        </strong>
-                        <span>{aiHybridMessage}</span>
+                        {medForm.fotos_input.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => analyzePhotosWithAI()}
+                            disabled={analyzingPhoto}
+                            className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-medium ${greyBtn}`}
+                          >
+                            {analyzingPhoto ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" />
+                            )}
+                            <span>Analizar</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
-                    {aiMissingFields.length > 0 && (
-                      <div className="pl-6 space-y-1">
-                        <span className="text-[11px] font-semibold text-amber-300 uppercase tracking-wider block">
-                          Completá manualmente estos datos que no se vieron en la foto (o subí otra foto donde se vean):
-                        </span>
-                        <ul className="list-disc list-inside text-xs text-amber-200/90 space-y-0.5">
-                          {aiMissingFields.map((f, i) => (
-                            <li key={i}>
-                              <strong>{f.etiqueta}:</strong> {f.motivo}
-                            </li>
-                          ))}
-                        </ul>
+                    {medForm.fotos_input.length > 0 && (
+                      <div className="flex items-center gap-2 overflow-x-auto pt-1">
+                        {medForm.fotos_input.map((imgSrc, idx) => (
+                          <div
+                            key={idx}
+                            className="relative h-14 w-14 shrink-0 rounded-lg overflow-hidden border border-[#383f4e] bg-[#0e1016]"
+                          >
+                            <img
+                              src={imgSrc}
+                              alt={`Foto ${idx + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePhotoAtIndex(idx)}
+                              className="absolute top-0.5 right-0.5 rounded-full bg-black/80 p-0.5 text-white hover:bg-zinc-700"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
                     )}
-                  </div>
-                )}
-              </div>
 
-              {/* Main Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Nombre Comercial *
-                    </label>
-                    {isFieldMissingFromAI('nombre') ? (
-                      <span className="text-[10px] font-semibold text-amber-400">
-                        ⚠️ Completar manualmente
-                      </span>
-                    ) : aiDetectedFields.includes('nombre') ? (
-                      <span className="text-[10px] font-medium text-emerald-400">
-                        ✨ Leído de la foto
-                      </span>
-                    ) : null}
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    value={medForm.nombre}
-                    onChange={(e) => {
-                      updateMedFormAutoStock({ nombre: e.target.value })
-                      if (e.target.value.trim()) clearFieldMissingFlag('nombre')
-                    }}
-                    placeholder="Ej: Ibupirac 4%, Tafirol 1g, Reliveran Gotas"
-                    className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground ${
-                      isFieldMissingFromAI('nombre')
-                        ? 'border-amber-500 ring-1 ring-amber-500/40'
-                        : 'border-border'
-                    }`}
-                  />
-                </div>
+                    {analyzingPhoto && (
+                      <div className="flex items-center space-x-2 text-xs text-red-300">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                        <span>Analizando foto(s) con IA...</span>
+                      </div>
+                    )}
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Droga / Principio Activo
-                    </label>
-                    {isFieldMissingFromAI('droga') ? (
-                      <span className="text-[10px] font-semibold text-amber-400">
-                        ⚠️ Completar manualmente
-                      </span>
-                    ) : aiDetectedFields.includes('droga') ? (
-                      <span className="text-[10px] font-medium text-emerald-400">
-                        ✨ Leído de la foto
-                      </span>
-                    ) : null}
-                  </div>
-                  <input
-                    type="text"
-                    value={medForm.droga}
-                    onChange={(e) => {
-                      updateMedFormAutoStock({ droga: e.target.value })
-                      if (e.target.value.trim()) clearFieldMissingFlag('droga')
-                    }}
-                    placeholder="Ej: Ibuprofeno, Paracetamol, Metoclopramida"
-                    className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground ${
-                      isFieldMissingFromAI('droga')
-                        ? 'border-amber-500 ring-1 ring-amber-500/40'
-                        : 'border-border'
-                    }`}
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Concentración / Gramaje
-                    </label>
-                    {isFieldMissingFromAI('concentracion') ? (
-                      <span className="text-[10px] font-semibold text-amber-400">
-                        ⚠️ No visible — Completar
-                      </span>
-                    ) : aiDetectedFields.includes('concentracion') ? (
-                      <span className="text-[10px] font-medium text-emerald-400">
-                        ✨ Leído de la foto
-                      </span>
-                    ) : null}
-                  </div>
-                  <input
-                    type="text"
-                    value={medForm.concentracion}
-                    onChange={(e) => {
-                      setMedForm({ ...medForm, concentracion: e.target.value })
-                      if (e.target.value.trim()) clearFieldMissingFlag('concentracion')
-                    }}
-                    placeholder="Ej: 400 mg, 4g/100ml, 2 mg/ml"
-                    className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground ${
-                      isFieldMissingFromAI('concentracion')
-                        ? 'border-amber-500 ring-1 ring-amber-500/40'
-                        : 'border-border'
-                    }`}
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Público (Adultos / Pediátrico) *
-                    </label>
-                    {aiDetectedFields.includes('publico') && (
-                      <span className="text-[10px] font-medium text-emerald-400">
-                        ✨ Detectado
-                      </span>
+                    {!analyzingPhoto && aiHybridMessage && (
+                      <p className="text-[11px] text-amber-300 leading-snug">
+                        {aiHybridMessage}
+                      </p>
                     )}
                   </div>
-                  <select
-                    value={medForm.publico}
-                    onChange={(e) =>
-                      updateMedFormAutoStock({ publico: e.target.value as PublicoObjetivo })
-                    }
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                  >
-                    <option value="adulto">🧑 Adultos</option>
-                    <option value="pediatrico">👶 Pediátrico / Bebés</option>
-                    <option value="ambos">👨‍👩‍👧 Ambos / Uso Familiar</option>
-                  </select>
-                </div>
 
-                <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Categoría / Uso Principal
-                  </label>
-                  <select
-                    value={medForm.categoria}
-                    onChange={(e) => setMedForm({ ...medForm, categoria: e.target.value })}
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                  >
-                    {CATEGORIAS_MEDICAMENTOS.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  {/* General Fields */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Nombre Comercial *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={medForm.nombre}
+                        onChange={(e) => {
+                          updateMedFormAutoStock({ nombre: e.target.value })
+                          if (e.target.value.trim()) clearFieldMissingFlag('nombre')
+                        }}
+                        placeholder="Ej: Ibupirac 4%, Tafirol 1g"
+                        className={`w-full rounded-lg border bg-[#13161f] px-3 py-2 text-sm text-foreground ${
+                          isFieldMissingFromAI('nombre')
+                            ? 'border-amber-400'
+                            : 'border-[#383f4e]'
+                        }`}
+                      />
+                    </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Fecha de Vencimiento
-                    </label>
-                    {isFieldMissingFromAI('fecha_vencimiento') ? (
-                      <span className="text-[10px] font-semibold text-amber-400">
-                        ⚠️ No visible en foto — Cargar manual
-                      </span>
-                    ) : medForm.fecha_vencimiento && aiDetectedFields.includes('fecha_vencimiento') ? (
-                      <span className="text-[10px] font-medium text-emerald-400">
-                        ✨ Leído de la foto
-                      </span>
-                    ) : null}
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Droga / Principio Activo
+                      </label>
+                      <input
+                        type="text"
+                        value={medForm.droga}
+                        onChange={(e) => {
+                          updateMedFormAutoStock({ droga: e.target.value })
+                          if (e.target.value.trim()) clearFieldMissingFlag('droga')
+                        }}
+                        placeholder="Ej: Ibuprofeno"
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Concentración
+                      </label>
+                      <input
+                        type="text"
+                        value={medForm.concentracion}
+                        onChange={(e) => {
+                          setMedForm({ ...medForm, concentracion: e.target.value })
+                          if (e.target.value.trim()) clearFieldMissingFlag('concentracion')
+                        }}
+                        placeholder="Ej: 400 mg, 4%"
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Público
+                      </label>
+                      <select
+                        value={medForm.publico}
+                        onChange={(e) =>
+                          updateMedFormAutoStock({ publico: e.target.value as PublicoObjetivo })
+                        }
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      >
+                        <option value="adulto">🧑 Adultos</option>
+                        <option value="pediatrico">👶 Pediátrico</option>
+                        <option value="ambos">👨‍👩‍👧 Ambos</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Categoría
+                      </label>
+                      <select
+                        value={medForm.categoria}
+                        onChange={(e) => setMedForm({ ...medForm, categoria: e.target.value })}
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      >
+                        {CATEGORIAS_MEDICAMENTOS.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                  <input
-                    type="date"
-                    value={medForm.fecha_vencimiento}
-                    onChange={(e) => {
-                      setMedForm({ ...medForm, fecha_vencimiento: e.target.value })
-                      if (e.target.value) clearFieldMissingFlag('fecha_vencimiento')
-                    }}
-                    className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground ${
-                      isFieldMissingFromAI('fecha_vencimiento')
-                        ? 'border-amber-500 ring-1 ring-amber-500/40'
-                        : 'border-border'
-                    }`}
-                  />
                 </div>
-              </div>
+              )}
 
-              {/* Quantity & Unit Row */}
-              <div
-                className={`grid grid-cols-2 sm:grid-cols-4 gap-3 rounded-xl border p-3.5 ${
-                  isFieldMissingFromAI('cantidad_inicial') ||
-                  aiMissingFields.some((f) => f.campo === 'cantidad_actual')
-                    ? 'border-amber-500/50 bg-amber-950/10'
-                    : 'border-border bg-background/60'
-                }`}
-              >
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Unidad de Medida
-                  </label>
-                  <select
-                    value={medForm.unidad}
-                    onChange={(e) =>
-                      setMedForm({ ...medForm, unidad: e.target.value as UnidadMedida })
-                    }
-                    className="w-full rounded-lg border border-border bg-card px-2.5 py-2 text-xs text-foreground"
-                  >
-                    {UNIDADES_OPTIONS.map((u) => (
-                      <option key={u.value} value={u.value}>
-                        {u.label}
-                      </option>
-                    ))}
-                  </select>
+              {/* TAB 2: STOCK */}
+              {medModalTab === 'stock' && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Unidad de Medida
+                      </label>
+                      <select
+                        value={medForm.unidad}
+                        onChange={(e) =>
+                          setMedForm({ ...medForm, unidad: e.target.value as UnidadMedida })
+                        }
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      >
+                        {UNIDADES_OPTIONS.map((u) => (
+                          <option key={u.value} value={u.value}>
+                            {u.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Fecha de Vencimiento
+                      </label>
+                      <input
+                        type="date"
+                        value={medForm.fecha_vencimiento}
+                        onChange={(e) => {
+                          setMedForm({ ...medForm, fecha_vencimiento: e.target.value })
+                          if (e.target.value) clearFieldMissingFlag('fecha_vencimiento')
+                        }}
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Cantidad Disponible *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        required
+                        value={medForm.cantidad_actual}
+                        onChange={(e) => {
+                          setMedForm({ ...medForm, cantidad_actual: Number(e.target.value) })
+                          clearFieldMissingFlag('cantidad_actual')
+                        }}
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm font-bold text-foreground"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Contenido Total Envase
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        value={medForm.cantidad_inicial}
+                        onChange={(e) => {
+                          updateMedFormAutoStock({ cantidad_inicial: Number(e.target.value) })
+                          clearFieldMissingFlag('cantidad_inicial')
+                        }}
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-medium text-zinc-200 block mb-1">
+                        Stock Mínimo (por defecto 0, o 20% si es esencial)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        value={medForm.stock_minimo}
+                        onChange={(e) => {
+                          setStockMinimoTouched(true)
+                          setMedForm({ ...medForm, stock_minimo: Number(e.target.value) })
+                        }}
+                        className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                      />
+                    </div>
+                  </div>
                 </div>
+              )}
 
-                <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Cant. Disponible *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    required
-                    value={medForm.cantidad_actual}
-                    onChange={(e) => {
-                      setMedForm({ ...medForm, cantidad_actual: Number(e.target.value) })
-                      clearFieldMissingFlag('cantidad_actual')
-                      clearFieldMissingFlag('cantidad_inicial')
-                    }}
-                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-bold text-emerald-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Contenido Envase
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="1"
-                    value={medForm.cantidad_inicial}
-                    onChange={(e) => {
-                      updateMedFormAutoStock({ cantidad_inicial: Number(e.target.value) })
-                      clearFieldMissingFlag('cantidad_inicial')
-                    }}
-                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Stock Mínimo
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={medForm.stock_minimo}
-                    onChange={(e) =>
-                      {
-                        setStockMinimoTouched(true)
-                        setMedForm({ ...medForm, stock_minimo: Number(e.target.value) })
-                      }
-                    }
-                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
-                  />
-                </div>
-              </div>
-
-              {/* Details & Posology */}
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    ¿Para qué sirve? (Síntomas / Indicaciones)
-                  </label>
-                  <input
-                    type="text"
-                    value={medForm.para_que_sirve}
-                    onChange={(e) => updateMedFormAutoStock({ para_que_sirve: e.target.value })}
-                    placeholder="Ej: Fiebre, dolor de espalda, contracturas, dolor de cabeza..."
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* TAB 3: USO */}
+              {medModalTab === 'uso' && (
+                <div className="space-y-4">
                   <div>
-                    <label className="text-xs font-medium text-foreground block mb-1">
-                      Posología / Dosis de referencia
+                    <label className="text-xs font-medium text-zinc-200 block mb-1">
+                      Para qué sirve (solo síntomas resumidos)
+                    </label>
+                    <input
+                      type="text"
+                      value={medForm.para_que_sirve}
+                      onChange={(e) => updateMedFormAutoStock({ para_que_sirve: e.target.value })}
+                      placeholder="Ej: Fiebre, tos, dolor de panza, dolores musculares"
+                      className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-zinc-200 block mb-1">
+                      Dosis recomendada
                     </label>
                     <input
                       type="text"
@@ -2860,14 +2621,14 @@ export default function BotiquinAppClient({
                       onChange={(e) =>
                         setMedForm({ ...medForm, posologia_referencia: e.target.value })
                       }
-                      placeholder="Ej: 1 comp cada 8 hs / 5 ml cada 8 hs"
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                      placeholder="Ej: 1 comprimido cada 8 hs"
+                      className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                     />
                   </div>
 
                   <div>
-                    <label className="text-xs font-medium text-foreground block mb-1">
-                      Vincular a Esencial de 1ra Necesidad (opcional)
+                    <label className="text-xs font-medium text-zinc-200 block mb-1">
+                      Vincular a Esencial (opcional)
                     </label>
                     <select
                       value={medForm.esencial_id}
@@ -2891,9 +2652,9 @@ export default function BotiquinAppClient({
                             : medForm.stock_minimo,
                         })
                       }
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                      className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                     >
-                      <option value="">Detección automática por droga/nombre</option>
+                      <option value="">Detección automática</option>
                       {state.esenciales.map((esc) => (
                         <option key={esc.id} value={esc.id}>
                           ⭐ {esc.nombre}
@@ -2902,23 +2663,24 @@ export default function BotiquinAppClient({
                     </select>
                   </div>
                 </div>
-              </div>
+              )}
 
-              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-border">
+              {/* Modal Footer (1 word & grey) */}
+              <div className="flex items-center justify-end space-x-2.5 pt-5 mt-5 border-t border-[#383f4e]">
                 <button
                   type="button"
                   onClick={() => setMedModalOpen(false)}
-                  className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtn}`}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={savingMed}
-                  className="flex items-center space-x-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  className={`flex items-center space-x-1.5 rounded-xl px-5 py-2 text-xs font-semibold disabled:opacity-50 ${greyBtnActive}`}
                 >
-                  {savingMed && <Loader2 className="h-4 w-4 animate-spin" />}
-                  <span>{editingMed ? 'Guardar Cambios' : 'Guardar en el Stock'}</span>
+                  {savingMed && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>Guardar</span>
                 </button>
               </div>
             </form>
@@ -2930,31 +2692,37 @@ export default function BotiquinAppClient({
       {/* MODAL: DESCONTAR DOSIS USADA                                          */}
       {/* ===================================================================== */}
       {dosisModalMed && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
+        <div
+          onClick={() => setDosisModalMed(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
-                Registrar Dosis Usada • {dosisModalMed.nombre}
+                Usar • {dosisModalMed.nombre}
               </h3>
               <button
                 onClick={() => setDosisModalMed(null)}
-                className="p-1 text-muted-foreground hover:text-foreground"
+                className={`p-1.5 rounded-lg ${greyBtn}`}
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             <form onSubmit={handleConsumeDosis} className="mt-4 space-y-4">
               <div className="text-xs text-muted-foreground">
-                Disponible actualmente:{' '}
+                Disponible:{' '}
                 <strong className="text-foreground">
                   {dosisModalMed.cantidad_actual} {dosisModalMed.unidad}
                 </strong>
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-2">
-                  Cantidad utilizada ({dosisModalMed.unidad}):
+                <label className="text-xs font-medium text-zinc-200 block mb-2">
+                  Cantidad ({dosisModalMed.unidad}):
                 </label>
                 <div className="flex flex-wrap gap-2 mb-2.5">
                   {(dosisModalMed.unidad === 'ml'
@@ -2967,13 +2735,11 @@ export default function BotiquinAppClient({
                       key={preset}
                       type="button"
                       onClick={() => setDosisCantidad(preset)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                        dosisCantidad === preset
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                        dosisCantidad === preset ? greyBtnActive : greyBtn
                       }`}
                     >
-                      -{preset} {dosisModalMed.unidad}
+                      -{preset}
                     </button>
                   ))}
                 </div>
@@ -2985,20 +2751,20 @@ export default function BotiquinAppClient({
                   required
                   value={dosisCantidad}
                   onChange={(e) => setDosisCantidad(Number(e.target.value))}
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm font-bold text-foreground"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3.5 py-2 text-sm font-bold text-foreground"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
-                  Nota / Para quién se usó (opcional):
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Nota (opcional):
                 </label>
                 <input
                   type="text"
                   value={dosisMotivo}
                   onChange={(e) => setDosisMotivo(e.target.value)}
-                  placeholder="Ej: Dosis para dolor de espalda / Fiebre del bebé"
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm text-foreground"
+                  placeholder="Ej: Fiebre / Dolor de cabeza"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3.5 py-2 text-sm text-foreground"
                 />
               </div>
 
@@ -3006,16 +2772,16 @@ export default function BotiquinAppClient({
                 <button
                   type="button"
                   onClick={() => setDosisModalMed(null)}
-                  className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtn}`}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={submittingDosis}
-                  className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtnActive}`}
                 >
-                  {submittingDosis ? 'Descontando...' : `Descontar -${dosisCantidad} ${dosisModalMed.unidad}`}
+                  {submittingDosis ? 'Descontando...' : 'Descontar'}
                 </button>
               </div>
             </form>
@@ -3027,23 +2793,29 @@ export default function BotiquinAppClient({
       {/* MODAL: REPONER STOCK                                                  */}
       {/* ===================================================================== */}
       {reponerModalMed && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
+        <div
+          onClick={() => setReponerModalMed(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
-                Reponer Stock • {reponerModalMed.nombre}
+                Reponer • {reponerModalMed.nombre}
               </h3>
               <button
                 onClick={() => setReponerModalMed(null)}
-                className="p-1 text-muted-foreground hover:text-foreground"
+                className={`p-1.5 rounded-lg ${greyBtn}`}
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             <form onSubmit={handleReponerStock} className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
                   Cantidad a sumar ({reponerModalMed.unidad}):
                 </label>
                 <input
@@ -3053,19 +2825,19 @@ export default function BotiquinAppClient({
                   required
                   value={reponerCantidad}
                   onChange={(e) => setReponerCantidad(Number(e.target.value))}
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm font-bold text-emerald-400"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3.5 py-2 text-sm font-bold text-foreground"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
-                  Nueva fecha de vencimiento (si compraste caja nueva):
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Nueva fecha de vencimiento:
                 </label>
                 <input
                   type="date"
                   value={reponerVencimiento}
                   onChange={(e) => setReponerVencimiento(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm text-foreground"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3.5 py-2 text-sm text-foreground"
                 />
               </div>
 
@@ -3073,16 +2845,16 @@ export default function BotiquinAppClient({
                 <button
                   type="button"
                   onClick={() => setReponerModalMed(null)}
-                  className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtn}`}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={submittingReponer}
-                  className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-zinc-950 hover:bg-emerald-400"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtnActive}`}
                 >
-                  {submittingReponer ? 'Guardando...' : `+ Sumar ${reponerCantidad} ${reponerModalMed.unidad}`}
+                  {submittingReponer ? 'Guardando...' : 'Reponer'}
                 </button>
               </div>
             </form>
@@ -3091,50 +2863,47 @@ export default function BotiquinAppClient({
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL: DAR DE BAJA EL PRODUCTO COMPLETO (VENCIDO / TIRADO / PERDIDO)  */}
+      {/* MODAL: DAR DE BAJA EL PRODUCTO COMPLETO                               */}
       {/* ===================================================================== */}
       {bajaModalMed && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-base font-bold text-red-400">
-                Dar de Baja Producto Completo
+        <div
+          onClick={() => setBajaModalMed(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
+              <h3 className="text-base font-bold text-red-300">
+                Dar de Baja • {bajaModalMed.nombre}
               </h3>
               <button
                 onClick={() => setBajaModalMed(null)}
-                className="p-1 text-muted-foreground hover:text-foreground"
+                className={`p-1.5 rounded-lg ${greyBtn}`}
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             <form onSubmit={handleBajaMedicamento} className="mt-4 space-y-4">
-              <p className="text-xs text-muted-foreground">
-                Vas a dar de baja <strong>{bajaModalMed.nombre}</strong> (actualmente con{' '}
-                {bajaModalMed.cantidad_actual} {bajaModalMed.unidad}). Si este medicamento cubría un
-                producto de primera necesidad y no hay otro reemplazo, se enviará una alerta a tu
-                correo.
-              </p>
-
               <div className="space-y-2">
-                <label className="text-xs font-medium text-foreground block">
-                  Motivo de la baja:
+                <label className="text-xs font-medium text-zinc-200 block">
+                  Motivo:
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { id: 'vencido', label: '🚨 Se venció' },
-                    { id: 'tirado', label: '🗑️ Lo tiré / Descarté' },
-                    { id: 'perdido', label: '🔍 Lo perdí' },
-                    { id: 'agotado', label: '📦 Se terminó todo' },
+                    { id: 'vencido', label: 'Vencido' },
+                    { id: 'tirado', label: 'Descartado' },
+                    { id: 'perdido', label: 'Perdido' },
+                    { id: 'agotado', label: 'Agotado' },
                   ].map((opt) => (
                     <button
                       key={opt.id}
                       type="button"
                       onClick={() => setBajaMotivo(opt.id as MotivoBaja)}
-                      className={`py-2.5 px-3 rounded-xl border text-xs font-semibold text-left transition-colors ${
-                        bajaMotivo === opt.id
-                          ? 'border-red-500 bg-red-500/20 text-red-200'
-                          : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold text-center ${
+                        bajaMotivo === opt.id ? greyBtnActive : greyBtn
                       }`}
                     >
                       {opt.label}
@@ -3144,15 +2913,15 @@ export default function BotiquinAppClient({
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
-                  Comentario adicional (opcional):
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Comentario (opcional):
                 </label>
                 <input
                   type="text"
                   value={bajaDetalle}
                   onChange={(e) => setBajaDetalle(e.target.value)}
                   placeholder="Ej: Frasco abierto hace más de 1 mes"
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2 text-sm text-foreground"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3.5 py-2 text-sm text-foreground"
                 />
               </div>
 
@@ -3160,16 +2929,16 @@ export default function BotiquinAppClient({
                 <button
                   type="button"
                   onClick={() => setBajaModalMed(null)}
-                  className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtn}`}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={submittingBaja}
-                  className="rounded-xl bg-red-500 px-4 py-2 text-xs font-bold text-white hover:bg-red-600"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtnActive}`}
                 >
-                  {submittingBaja ? 'Procesando...' : 'Confirmar Baja Total'}
+                  {submittingBaja ? 'Procesando...' : 'Confirmar'}
                 </button>
               </div>
             </form>
@@ -3181,25 +2950,29 @@ export default function BotiquinAppClient({
       {/* MODAL: ADD / EDIT PRODUCTO ESENCIAL                                   */}
       {/* ===================================================================== */}
       {esencialModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
+        <div
+          onClick={() => setEsencialModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
-                {editingEsencial
-                  ? 'Editar Producto de Primera Necesidad'
-                  : 'Nuevo Producto de Primera Necesidad'}
+                {editingEsencial ? 'Editar Esencial' : 'Nuevo Esencial'}
               </h3>
               <button
                 onClick={() => setEsencialModalOpen(false)}
-                className="p-1 text-muted-foreground hover:text-foreground"
+                className={`p-1.5 rounded-lg ${greyBtn}`}
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
             <form onSubmit={handleSaveEsencial} className="mt-4 space-y-3.5">
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
                   Nombre del Esencial *
                 </label>
                 <input
@@ -3207,15 +2980,15 @@ export default function BotiquinAppClient({
                   required
                   value={esencialForm.nombre}
                   onChange={(e) => setEsencialForm({ ...esencialForm, nombre: e.target.value })}
-                  placeholder="Ej: Ibuprofeno Pediátrico, Sales de Rehidratación..."
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  placeholder="Ej: Ibuprofeno Pediátrico"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
-                    Droga / Producto sugerido
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
+                    Droga sugerida
                   </label>
                   <input
                     type="text"
@@ -3224,12 +2997,12 @@ export default function BotiquinAppClient({
                       setEsencialForm({ ...esencialForm, droga_sugerida: e.target.value })
                     }
                     placeholder="Ej: Ibuprofeno 4%"
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
                     Público
                   </label>
                   <select
@@ -3240,7 +3013,7 @@ export default function BotiquinAppClient({
                         publico: e.target.value as PublicoObjetivo,
                       })
                     }
-                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                   >
                     <option value="ambos">👨‍👩‍👧 Ambos</option>
                     <option value="pediatrico">👶 Pediátrico</option>
@@ -3250,21 +3023,21 @@ export default function BotiquinAppClient({
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
-                  Palabras clave para detectar automáticamente en tu stock (separadas por coma):
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Palabras clave (separadas por coma):
                 </label>
                 <input
                   type="text"
                   value={esencialForm.keywords}
                   onChange={(e) => setEsencialForm({ ...esencialForm, keywords: e.target.value })}
                   placeholder="Ej: ibuprofeno, ibupirac, actron"
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">
-                  Descripción / Utilidad
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Descripción
                 </label>
                 <input
                   type="text"
@@ -3272,24 +3045,24 @@ export default function BotiquinAppClient({
                   onChange={(e) =>
                     setEsencialForm({ ...esencialForm, descripcion: e.target.value })
                   }
-                  placeholder="Ej: Fundamental para fiebre e inflamación"
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  placeholder="Ej: Fiebre, inflamación"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                 />
               </div>
 
-              <div className="flex justify-end space-x-2 pt-3 border-t border-border">
+              <div className="flex justify-end space-x-2 pt-3 border-t border-[#383f4e]">
                 <button
                   type="button"
                   onClick={() => setEsencialModalOpen(false)}
-                  className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtn}`}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+                  className={`rounded-xl px-4 py-2 text-xs font-semibold ${greyBtnActive}`}
                 >
-                  Guardar Esencial
+                  Guardar
                 </button>
               </div>
             </form>
@@ -3309,7 +3082,7 @@ export default function BotiquinAppClient({
           >
             <button
               onClick={() => setLightboxPhotos([])}
-              className="absolute -top-10 right-0 rounded-full bg-zinc-800 p-2 text-white hover:bg-zinc-700"
+              className={`absolute -top-10 right-0 rounded-full p-2 ${greyBtn}`}
             >
               <X className="h-5 w-5" />
             </button>
@@ -3322,7 +3095,7 @@ export default function BotiquinAppClient({
                       (lightboxIndex - 1 + lightboxPhotos.length) % lightboxPhotos.length
                     )
                   }
-                  className="absolute left-2 rounded-full bg-black/70 p-2 text-white hover:bg-black"
+                  className={`absolute left-2 rounded-full p-2 ${greyBtn}`}
                 >
                   <ChevronLeft className="h-6 w-6" />
                 </button>
@@ -3331,7 +3104,7 @@ export default function BotiquinAppClient({
               <img
                 src={lightboxPhotos[lightboxIndex]}
                 alt={`Foto ${lightboxIndex + 1}`}
-                className="max-h-[75vh] max-w-full rounded-2xl border border-border object-contain"
+                className="max-h-[75vh] max-w-full rounded-2xl border border-[#4a5264] object-contain"
               />
 
               {lightboxPhotos.length > 1 && (
@@ -3339,7 +3112,7 @@ export default function BotiquinAppClient({
                   onClick={() =>
                     setLightboxIndex((lightboxIndex + 1) % lightboxPhotos.length)
                   }
-                  className="absolute right-2 rounded-full bg-black/70 p-2 text-white hover:bg-black"
+                  className={`absolute right-2 rounded-full p-2 ${greyBtn}`}
                 >
                   <ChevronRight className="h-6 w-6" />
                 </button>

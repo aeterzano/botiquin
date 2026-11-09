@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Botiquín Virtual | Gestión de Medicamentos y Consultorio IA",
+  title: "Botiquín Virtual",
   description: "Control de stock de medicamentos pediátricos y adultos, vencimientos, alertas por email y asistente médico con IA.",
 };
 
@@ -30,7 +30,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <NextTopLoader
-          color="#10b981"
+          color="#f87171"
           initialPosition={0.08}
           crawlSpeed={200}
           height={3}
@@ -38,7 +38,7 @@ export default function RootLayout({
           showSpinner={false}
           easing="ease"
           speed={200}
-          shadow="0 0 10px #10b981,0 0 5px #10b981"
+          shadow="0 0 10px #f87171,0 0 5px #f87171"
         />
         {children}
       </body>

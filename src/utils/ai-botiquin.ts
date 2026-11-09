@@ -152,7 +152,7 @@ Devolvé EXCLUSIVAMENTE un objeto JSON válido con la siguiente estructura exact
   "unidad": "Elegí una unidad entre: 'comprimidos', 'ml', 'gotas', 'sobres', 'ampollas', 'g', 'disparos', 'unidades'",
   "cantidad_inicial": 10, // Número con el contenido total del envase si se lee en la caja (ej. 10 comprimidos, 90 ml, 20 ml). Si NO se ve en ninguna foto, devolver null.
   "fecha_vencimiento": null, // SOLO si la fecha de vencimiento (VTO / EXP / Vence) es visible en alguna de las fotos, devolver en formato "YYYY-MM-DD" (si dice MM/YYYY usar el último día de ese mes, ej "2027-08-31"). Si NO se ve la fecha de vencimiento en las fotos, devolver SIEMPRE null.
-  "para_que_sirve": "Resumen claro de para qué síntomas o cuadros se utiliza este medicamento.",
+  "para_que_sirve": "Lista hiper resumida únicamente con los síntomas que trata separados por coma (ej: 'Fiebre, dolor de cabeza, dolores musculares' o 'Náuseas, vómitos'). Máximo 5 a 8 palabras, sin verbos ni oraciones largas.",
   "posologia_referencia": "Dosis habitual orientativa según prospecto para su público objetivo.",
   "notas": "Advertencias importantes (ej: 'Conservar en heladera una vez abierto', 'Agitar antes de usar').",
   "campos_detectados": ["nombre", "droga", "concentracion", "publico", "unidad", "para_que_sirve", "posologia_referencia"], // Lista de nombres de campos que SÍ pudiste completar a partir de las fotos

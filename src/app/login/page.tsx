@@ -17,7 +17,7 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-[#3a404f] bg-[#1c1f29] p-8 shadow-2xl">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 border border-primary/30 text-primary">
             <HeartPulse className="h-8 w-8" />
@@ -45,7 +45,7 @@ export default async function LoginPage({
               type="email"
               required
               defaultValue="aeterzano@gmail.com"
-              className="rounded-lg border border-border bg-background px-4 py-2.5 text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
+              className="rounded-lg border border-[#323846] bg-[#101218] px-4 py-2.5 text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
               placeholder="aeterzano@gmail.com"
             />
           </div>
@@ -58,17 +58,17 @@ export default async function LoginPage({
               name="password"
               type="password"
               required
-              className="rounded-lg border border-border bg-background px-4 py-2.5 text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
+              className="rounded-lg border border-[#323846] bg-[#101218] px-4 py-2.5 text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary transition-colors"
               placeholder="••••••••"
             />
           </div>
           <div className="pt-4 flex flex-col space-y-3">
-            <SubmitButton label="Ingresar al Botiquín" />
+            <SubmitButton label="Ingresar" />
             <a
               href="/registro"
-              className="w-full text-center rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+              className="w-full text-center rounded-lg border border-zinc-600/80 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700 transition-colors"
             >
-              Crear Cuenta
+              Registro
             </a>
           </div>
         </form>

@@ -10,7 +10,7 @@ export function SubmitButton({ label = 'Ingresar' }: { label?: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="w-full flex items-center justify-center rounded-lg bg-primary px-4 py-2.5 font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+      className="w-full flex items-center justify-center rounded-lg bg-zinc-800 border border-zinc-600/80 px-4 py-2.5 font-semibold text-zinc-100 hover:bg-zinc-700 disabled:opacity-50 transition-colors"
     >
       {pending ? (
         <>
