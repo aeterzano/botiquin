@@ -16,7 +16,6 @@ import {
   XCircle,
   Clock,
   MinusCircle,
-  PlusCircle,
   Trash2,
   Edit3,
   Send,
@@ -34,7 +33,6 @@ import {
   Pill,
   Droplets,
   Info,
-  ArchiveX,
   Images,
   ChevronLeft,
   ChevronRight,
@@ -90,6 +88,11 @@ function formatMesAnio(fecha: string | null | undefined): string {
     return `${parts[1]}/${parts[0]}`
   }
   return fecha
+}
+
+function formatEspacioMedida(texto: string | null | undefined): string {
+  if (!texto) return ''
+  return texto.replace(/(\d+(?:[.,]\d+)?)\s*(mg|ml|g|mcg|ug|ui|l|kg|cm3|cc)\b/gi, '$1 $2')
 }
 
 function resumirSintomas(texto: string | null | undefined): string {
@@ -349,6 +352,35 @@ export default function BotiquinAppClient({
       return a.nombre.localeCompare(b.nombre, 'es')
     })
   }, [state.esenciales])
+
+  // Sync activeTab with URL query param (?tab=stock|consulta|esenciales|alertas)
+  useEffect(() => {
+    function syncTabFromUrl() {
+      const params = new URLSearchParams(window.location.search)
+      const tabParam = params.get('tab')
+      if (
+        tabParam === 'stock' ||
+        tabParam === 'consulta' ||
+        tabParam === 'esenciales' ||
+        tabParam === 'alertas'
+      ) {
+        setActiveTab(tabParam)
+      }
+    }
+    syncTabFromUrl()
+    window.addEventListener('popstate', syncTabFromUrl)
+    return () => window.removeEventListener('popstate', syncTabFromUrl)
+  }, [])
+
+  function handleTabNavClick(e: React.MouseEvent<HTMLAnchorElement>, tab: TabType) {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return
+    }
+    e.preventDefault()
+    setActiveTab(tab)
+    const url = tab === 'stock' ? '/' : `/?tab=${tab}`
+    window.history.pushState(null, '', url)
+  }
 
   // Close any open pop-up when pressing ESC
   useEffect(() => {
@@ -640,9 +672,9 @@ export default function BotiquinAppClient({
 
         return {
           ...prev,
-          nombre: d.nombre || prev.nombre,
-          droga: d.droga || prev.droga,
-          concentracion: d.concentracion || prev.concentracion,
+          nombre: formatEspacioMedida(d.nombre || prev.nombre),
+          droga: formatEspacioMedida(d.droga || prev.droga),
+          concentracion: formatEspacioMedida(d.concentracion || prev.concentracion),
           publico: d.publico || prev.publico,
           categoria: d.categoria || prev.categoria,
           unidad: d.unidad || prev.unidad,
@@ -715,6 +747,9 @@ export default function BotiquinAppClient({
           medicamento: {
             ...(editingMed ? { id: editingMed.id } : {}),
             ...medForm,
+            nombre: formatEspacioMedida(medForm.nombre.trim()),
+            droga: formatEspacioMedida(medForm.droga.trim()),
+            concentracion: formatEspacioMedida(medForm.concentracion.trim()),
           },
         }),
       })
@@ -904,7 +939,7 @@ export default function BotiquinAppClient({
       text: queryText,
       pacienteTipo:
         pacienteTipo === 'pediatrico'
-          ? '👶 Pediátrico'
+          ? '👶 Bebé'
           : pacienteTipo === 'adulto'
           ? '🧑 Adulto'
           : 'Auto',
@@ -1094,8 +1129,9 @@ export default function BotiquinAppClient({
       <nav className="border-b border-[#383e4e] bg-[#1e222d] px-4 md:px-8 py-3.5 sticky top-0 z-40 shadow-lg">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <div className="flex items-center space-x-8">
-            <button
-              onClick={() => setActiveTab('stock')}
+            <a
+              href="/"
+              onClick={(e) => handleTabNavClick(e, 'stock')}
               className="flex items-center space-x-3 text-left"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/40 text-primary">
@@ -1104,57 +1140,61 @@ export default function BotiquinAppClient({
               <span className="text-lg font-bold text-foreground tracking-tight block leading-none">
                 Botiquín Virtual
               </span>
-            </button>
+            </a>
 
-            {/* Desktop Nav Links */}
+            {/* Desktop Nav Links (Anchor elements so right-click "Open in new tab/window" works) */}
             <div className="hidden md:flex items-center space-x-2">
-              <button
-                onClick={() => setActiveTab('stock')}
+              <a
+                href="/?tab=stock"
+                onClick={(e) => handleTabNavClick(e, 'stock')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'stock' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Package className="h-4 w-4" />
                 <span>Stock</span>
-              </button>
+              </a>
 
-              <button
-                onClick={() => setActiveTab('consulta')}
+              <a
+                href="/?tab=consulta"
+                onClick={(e) => handleTabNavClick(e, 'consulta')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'consulta' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Bot className="h-4 w-4" />
                 <span>Consultorio IA</span>
-              </button>
+              </a>
 
-              <button
-                onClick={() => setActiveTab('esenciales')}
+              <a
+                href="/?tab=esenciales"
+                onClick={(e) => handleTabNavClick(e, 'esenciales')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'esenciales' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Star className="h-4 w-4" />
                 <span>Esenciales</span>
-              </button>
+              </a>
 
-              <button
-                onClick={() => setActiveTab('alertas')}
+              <a
+                href="/?tab=alertas"
+                onClick={(e) => handleTabNavClick(e, 'alertas')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'alertas' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Bell className="h-4 w-4" />
                 <span>Alertas</span>
-              </button>
+              </a>
             </div>
           </div>
 
           <div className="hidden md:flex items-center space-x-3">
-            {/* ONLY colored button in the entire app */}
+            {/* + Medicamento styled with the same colors, background and border lines as the Heart icon */}
             <button
               onClick={() => openNewMedModal()}
-              className="flex items-center space-x-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 shadow-sm transition-colors"
+              className="flex items-center space-x-1.5 rounded-xl bg-primary/15 border border-primary/40 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25 shadow-sm transition-colors"
             >
               <span>+ Medicamento</span>
             </button>
@@ -1174,7 +1214,7 @@ export default function BotiquinAppClient({
           <div className="flex md:hidden items-center space-x-2">
             <button
               onClick={() => openNewMedModal()}
-              className="flex items-center space-x-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white"
+              className="flex items-center space-x-1 rounded-xl bg-primary/15 border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/25 transition-colors"
             >
               <span>+ Medicamento</span>
             </button>
@@ -1210,31 +1250,8 @@ export default function BotiquinAppClient({
         {/* ================================================================= */}
         {activeTab === 'stock' && (
           <div className="space-y-6">
-            {/* 4 Compact Top Summary Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div
-                onClick={() => {
-                  setFilterEstado('activos')
-                  setFilterPublico('todos')
-                }}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Stock Actual
-                  </span>
-                  <Package className="h-4 w-4 text-primary" />
-                </div>
-                <div className="mt-1.5 flex items-baseline flex-wrap gap-x-2 gap-y-0.5">
-                  <span className="text-2xl font-bold text-foreground">
-                    {kpis.totalVigentes}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    (👶 {kpis.pediatricosCount} Pediátricos · 🧑 {kpis.adultosCount} Adultos)
-                  </span>
-                </div>
-              </div>
-
+            {/* 3 Compact Top Summary Cards (Stock Actual removed) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div
                 onClick={() => setFilterEstado('proximo_vencer')}
                 className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-amber-400/50 transition-colors"
@@ -1286,7 +1303,10 @@ export default function BotiquinAppClient({
               </div>
 
               <div
-                onClick={() => setActiveTab('esenciales')}
+                onClick={() => {
+                  setActiveTab('esenciales')
+                  window.history.pushState(null, '', '/?tab=esenciales')
+                }}
                 className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
@@ -1297,7 +1317,7 @@ export default function BotiquinAppClient({
                 </div>
                 <div className="mt-1.5 flex items-baseline">
                   <span className="text-2xl font-bold text-foreground">
-                    {kpis.esencialesCubiertos}/{kpis.esencialesTotal}
+                    {kpis.esencialesCubiertos} de {kpis.esencialesTotal}
                   </span>
                 </div>
               </div>
@@ -1494,82 +1514,77 @@ export default function BotiquinAppClient({
 
                             {/* Styled custom tooltip for Nombre */}
                             <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
-                              <span className="block truncate">{med.nombre}</span>
+                              <span className="block truncate">{formatEspacioMedida(med.nombre)}</span>
                               <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/nombre:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-2xl whitespace-normal break-words">
-                                {med.nombre}
+                                {formatEspacioMedida(med.nombre)}
                               </span>
                             </h3>
                             <p className="text-xs text-muted-foreground truncate mt-0.5">
-                              {med.droga || 'Sin especificar'}{' '}
-                              {med.concentracion ? `• ${med.concentracion}` : ''}
+                              {formatEspacioMedida(med.droga) || 'Sin especificar'}{' '}
+                              {med.concentracion ? `• ${formatEspacioMedida(med.concentracion)}` : ''}
                             </p>
                           </div>
                         </div>
 
-                        {/* Single compact line: Disponibilidad: 75% | Vencimiento: 12/2027 */}
-                        <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3.5 py-2 text-xs flex items-center justify-between gap-2">
-                          <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
-                            <span>
-                              <span className="text-muted-foreground">Disponibilidad:</span>{' '}
-                              <strong
-                                className={
-                                  sinStock
-                                    ? 'text-red-400'
-                                    : med.cantidad_actual <= med.stock_minimo
-                                    ? 'text-amber-400'
-                                    : 'text-foreground'
-                                }
-                              >
-                                {pct}%
-                              </strong>
-                            </span>
-                            <span className="text-zinc-600">|</span>
-                            <span>
-                              <span className="text-muted-foreground">Vencimiento:</span>{' '}
-                              <strong
-                                className={
-                                  vencido
-                                    ? 'text-red-400'
-                                    : proximo
-                                    ? 'text-amber-400'
-                                    : 'text-foreground'
-                                }
-                              >
-                                {formatMesAnio(med.fecha_vencimiento)}
-                              </strong>
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Single compact line: Para qué sirve | Dosis recomendada (descriptions only on hover tooltip) */}
-                        <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3.5 py-2 text-xs flex items-center justify-between gap-2">
-                          <div className="flex items-center flex-wrap gap-x-2.5 gap-y-1">
-                            <span className="group/sirve relative cursor-default font-medium text-zinc-300 hover:text-white transition-colors">
-                              <span className="underline decoration-dotted decoration-zinc-500 underline-offset-2">
-                                Para qué sirve
-                              </span>
-                              <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/sirve:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
-                                <strong className="text-red-300 block mb-0.5">Para qué sirve:</strong>
-                                {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
-                              </span>
-                            </span>
-                            <span className="text-zinc-600">|</span>
-                            <span className="group/dosis relative cursor-default font-medium text-zinc-300 hover:text-white transition-colors">
-                              <span className="underline decoration-dotted decoration-zinc-500 underline-offset-2">
-                                Dosis recomendada
-                              </span>
-                              <span className="pointer-events-none absolute right-0 sm:left-0 bottom-full mb-1.5 hidden group-hover/dosis:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
-                                <strong className="text-sky-300 block mb-0.5">Dosis recomendada:</strong>
-                                {med.posologia_referencia || 'Sin especificar'}
-                              </span>
-                            </span>
-                          </div>
+                        {/* Single compact line: Disponibilidad: 75% | Vencimiento: 12/2027 ('|' exactly centered) */}
+                        <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3 py-2 text-xs grid grid-cols-[1fr_auto_1fr] items-center">
+                          <span className="text-center truncate">
+                            <span className="text-muted-foreground">Disponibilidad:</span>{' '}
+                            <strong
+                              className={
+                                sinStock
+                                  ? 'text-red-400'
+                                  : med.cantidad_actual <= med.stock_minimo
+                                  ? 'text-amber-400'
+                                  : 'text-foreground'
+                              }
+                            >
+                              {pct}%
+                            </strong>
+                          </span>
+                          <span className="text-zinc-500 px-2 select-none text-center">|</span>
+                          <span className="text-center truncate">
+                            <span className="text-muted-foreground">Vencimiento:</span>{' '}
+                            <strong
+                              className={
+                                vencido
+                                  ? 'text-red-400'
+                                  : proximo
+                                  ? 'text-amber-400'
+                                  : 'text-foreground'
+                              }
+                            >
+                              {formatMesAnio(med.fecha_vencimiento)}
+                            </strong>
+                          </span>
                         </div>
                       </div>
 
-                      {/* Card Footer Actions (1 word & grey) */}
+                      {/* Card Footer Actions: Función | Dosis | - | + | Editar | Eliminar */}
                       {med.estado === 'activo' ? (
-                        <div className="mt-4 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-2">
+                        <div className="mt-4 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-1.5">
+                          <button
+                            type="button"
+                            className={`group/sirve relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${greyBtn}`}
+                          >
+                            <span>Función</span>
+                            <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/sirve:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                              <strong className="text-red-300 block mb-0.5">Función:</strong>
+                              {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className={`group/dosis relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${greyBtn}`}
+                          >
+                            <span>Dosis</span>
+                            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover/dosis:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                              <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
+                              {med.posologia_referencia || 'Sin especificar'}
+                            </span>
+                          </button>
+
                           <button
                             type="button"
                             disabled={med.cantidad_actual <= 0}
@@ -1578,10 +1593,10 @@ export default function BotiquinAppClient({
                               setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
                               setDosisMotivo('')
                             }}
-                            className={`flex-1 flex items-center justify-center space-x-1.5 rounded-lg px-3 py-2 text-xs font-medium disabled:opacity-40 ${greyBtn}`}
+                            title="Usar / Descontar dosis"
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
                           >
-                            <MinusCircle className="h-3.5 w-3.5" />
-                            <span>Usar</span>
+                            -
                           </button>
 
                           <button
@@ -1592,17 +1607,16 @@ export default function BotiquinAppClient({
                               setReponerVencimiento(med.fecha_vencimiento || '')
                             }}
                             title="Reponer Stock"
-                            className={`flex-1 flex items-center justify-center space-x-1.5 rounded-lg px-3 py-2 text-xs font-medium ${greyBtn}`}
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold ${greyBtn}`}
                           >
-                            <PlusCircle className="h-3.5 w-3.5" />
-                            <span>Reponer</span>
+                            +
                           </button>
 
                           <button
                             type="button"
                             onClick={() => openEditMedModal(med)}
                             title="Editar"
-                            className={`p-2 rounded-lg ${greyBtn}`}
+                            className={`p-1.5 rounded-lg ${greyBtn}`}
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -1614,10 +1628,10 @@ export default function BotiquinAppClient({
                               setBajaMotivo(vencido ? 'vencido' : 'tirado')
                               setBajaDetalle('')
                             }}
-                            title="Dar de baja"
-                            className={`p-2 rounded-lg ${greyBtn}`}
+                            title="Eliminar / Dar de baja"
+                            className={`p-1.5 rounded-lg ${greyBtn}`}
                           >
-                            <ArchiveX className="h-3.5 w-3.5" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       ) : (
@@ -1692,7 +1706,7 @@ export default function BotiquinAppClient({
                       }`}
                     >
                       <Baby className="h-3.5 w-3.5" />
-                      <span>Pediátrico</span>
+                      <span>Bebé</span>
                     </button>
                     <button
                       type="button"
@@ -1827,7 +1841,7 @@ export default function BotiquinAppClient({
                       <Sparkles className="h-6 w-6" />
                     </div>
                     <h3 className="text-base font-bold text-foreground">
-                      Hacé tu consulta médica sobre tu Botiquín
+                      Hacé una consulta médica sobre tu Botiquín
                     </h3>
                     <p className="mt-1.5 text-xs text-muted-foreground max-w-md">
                       Escribí qué síntoma tenés vos o el bebé para revisar qué medicamentos vigentes tenés en stock.
@@ -2044,7 +2058,7 @@ export default function BotiquinAppClient({
               </div>
               <button
                 onClick={openNewEsencialModal}
-                className="shrink-0 flex items-center justify-center rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-950 border border-zinc-300 px-3.5 py-1.5 text-xs font-semibold transition-colors shadow-sm"
+                className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
               >
                 <span>+ Esencial</span>
               </button>
@@ -2075,13 +2089,13 @@ export default function BotiquinAppClient({
                           !esc.activo ? 'opacity-50' : ''
                         }`}
                       >
-                        {/* 1. Categoría: Grey tag if in stock, pastel red tag if missing */}
+                        {/* 1. Categoría: Grey tag if in stock, Heart-icon style (bg-primary/15 border-primary/40 text-primary) if missing */}
                         <td className="py-2 pl-3.5 pr-2 align-middle">
                           <span
-                            className={`inline-block rounded-lg px-2.5 py-1 text-xs font-semibold leading-snug text-white break-words ${
+                            className={`inline-block rounded-xl px-2.5 py-1 text-xs font-semibold leading-snug break-words ${
                               cubierto
-                                ? 'bg-zinc-700 border border-zinc-500/60'
-                                : 'bg-[#f87171]/85 border border-red-300/40'
+                                ? 'bg-zinc-700 text-white border border-zinc-400'
+                                : 'bg-primary/15 border border-primary/40 text-primary'
                             }`}
                             title={
                               cubierto
@@ -2356,45 +2370,49 @@ export default function BotiquinAppClient({
 
       {/* Mobile Bottom Navigation Bar */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 grid grid-cols-4 gap-1">
-        <button
-          onClick={() => setActiveTab('stock')}
+        <a
+          href="/?tab=stock"
+          onClick={(e) => handleTabNavClick(e, 'stock')}
           className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
             activeTab === 'stock' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
           <Package className="h-5 w-5 mb-0.5" />
           <span>Stock</span>
-        </button>
+        </a>
 
-        <button
-          onClick={() => setActiveTab('consulta')}
+        <a
+          href="/?tab=consulta"
+          onClick={(e) => handleTabNavClick(e, 'consulta')}
           className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
             activeTab === 'consulta' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
           <Bot className="h-5 w-5 mb-0.5" />
           <span>Consultorio IA</span>
-        </button>
+        </a>
 
-        <button
-          onClick={() => setActiveTab('esenciales')}
+        <a
+          href="/?tab=esenciales"
+          onClick={(e) => handleTabNavClick(e, 'esenciales')}
           className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
             activeTab === 'esenciales' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
           <Star className="h-5 w-5 mb-0.5" />
           <span>Esenciales</span>
-        </button>
+        </a>
 
-        <button
-          onClick={() => setActiveTab('alertas')}
+        <a
+          href="/?tab=alertas"
+          onClick={(e) => handleTabNavClick(e, 'alertas')}
           className={`relative flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
             activeTab === 'alertas' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
           <Bell className="h-5 w-5 mb-0.5" />
           <span>Alertas</span>
-        </button>
+        </a>
       </div>
 
       {/* ===================================================================== */}
