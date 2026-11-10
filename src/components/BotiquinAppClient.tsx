@@ -161,6 +161,40 @@ function formatMarcasSugeridas(esc: ProductoEsencial): string {
   return list.join(', ') || '-'
 }
 
+function renderInlineBold(text: string): React.ReactNode {
+  if (!text) return null
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={idx} className="font-semibold text-white">
+          {part.slice(2, -2)}
+        </strong>
+      )
+    }
+    return <React.Fragment key={idx}>{part.replace(/\*\*/g, '')}</React.Fragment>
+  })
+}
+
+function renderFormattedChatText(text: string): React.ReactNode {
+  if (!text) return null
+  const lines = text.split('\n')
+  return lines.map((rawLine, lineIdx) => {
+    const trimmed = rawLine.trim()
+    if (!trimmed) {
+      return <div key={lineIdx} className="h-2" />
+    }
+    const isBullet = /^([*-])\s+/.test(trimmed)
+    const cleanLine = isBullet ? trimmed.replace(/^([*-])\s+/, '') : rawLine
+    return (
+      <div key={lineIdx} className={isBullet ? 'flex items-start gap-2 pl-1 my-0.5' : ''}>
+        {isBullet && <span className="text-primary font-bold select-none">•</span>}
+        <span className="flex-1">{renderInlineBold(cleanLine)}</span>
+      </div>
+    )
+  })
+}
+
 async function compressImageFile(file: File, maxWidth = 1280, quality = 0.82): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1120,7 +1154,7 @@ export default function BotiquinAppClient({
             {/* ONLY colored button in the entire app */}
             <button
               onClick={() => openNewMedModal()}
-              className="flex items-center space-x-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 shadow-sm transition-colors"
+              className="flex items-center space-x-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 shadow-sm transition-colors"
             >
               <span>+ Medicamento</span>
             </button>
@@ -1140,7 +1174,7 @@ export default function BotiquinAppClient({
           <div className="flex md:hidden items-center space-x-2">
             <button
               onClick={() => openNewMedModal()}
-              className="flex items-center space-x-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+              className="flex items-center space-x-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white"
             >
               <span>+ Medicamento</span>
             </button>
@@ -1507,35 +1541,30 @@ export default function BotiquinAppClient({
                           </div>
                         </div>
 
-                        {/* Indications & Dosage with styled custom tooltip */}
-                        {(med.para_que_sirve || med.posologia_referencia) && (
-                          <div className="space-y-1.5 text-xs text-muted-foreground">
-                            {med.para_que_sirve && (
-                              <p className="group/tip relative cursor-default">
-                                <span className="block truncate">
-                                  <strong className="text-foreground/90">Para qué sirve:</strong>{' '}
-                                  {sintomasResumidos}
-                                </span>
-                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
-                                  <strong className="text-red-300">Para qué sirve:</strong>{' '}
-                                  {med.para_que_sirve}
-                                </span>
-                              </p>
-                            )}
-                            {med.posologia_referencia && (
-                              <p className="group/tip relative cursor-default">
-                                <span className="block truncate">
-                                  <strong className="text-foreground/90">Dosis recomendada:</strong>{' '}
-                                  {med.posologia_referencia}
-                                </span>
-                                <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/tip:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
-                                  <strong className="text-sky-300">Dosis recomendada:</strong>{' '}
-                                  {med.posologia_referencia}
-                                </span>
-                              </p>
-                            )}
+                        {/* Single compact line: Para qué sirve | Dosis recomendada (descriptions only on hover tooltip) */}
+                        <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3.5 py-2 text-xs flex items-center justify-between gap-2">
+                          <div className="flex items-center flex-wrap gap-x-2.5 gap-y-1">
+                            <span className="group/sirve relative cursor-default font-medium text-zinc-300 hover:text-white transition-colors">
+                              <span className="underline decoration-dotted decoration-zinc-500 underline-offset-2">
+                                Para qué sirve
+                              </span>
+                              <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/sirve:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                                <strong className="text-red-300 block mb-0.5">Para qué sirve:</strong>
+                                {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
+                              </span>
+                            </span>
+                            <span className="text-zinc-600">|</span>
+                            <span className="group/dosis relative cursor-default font-medium text-zinc-300 hover:text-white transition-colors">
+                              <span className="underline decoration-dotted decoration-zinc-500 underline-offset-2">
+                                Dosis recomendada
+                              </span>
+                              <span className="pointer-events-none absolute right-0 sm:left-0 bottom-full mb-1.5 hidden group-hover/dosis:block z-50 w-max max-w-[280px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                                <strong className="text-sky-300 block mb-0.5">Dosis recomendada:</strong>
+                                {med.posologia_referencia || 'Sin especificar'}
+                              </span>
+                            </span>
                           </div>
-                        )}
+                        </div>
                       </div>
 
                       {/* Card Footer Actions (1 word & grey) */}
@@ -1630,26 +1659,26 @@ export default function BotiquinAppClient({
         {activeTab === 'consulta' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
             {/* Left Column: Patient Selector + Numeric Edad/Peso + Virtual Medical Robot */}
-            <div className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-5 lg:h-[calc(100vh-175px)] lg:min-h-[380px] lg:max-h-[480px]">
-              <div className="space-y-4">
-                <div className="flex items-center space-x-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/30">
-                    <Bot className="h-5 w-5" />
+            <div className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-4 lg:h-[calc(100vh-175px)] lg:min-h-[380px] lg:max-h-[480px] overflow-hidden">
+              <div className="space-y-3 shrink-0">
+                <div className="flex items-center space-x-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/30">
+                    <Bot className="h-4 w-4" />
                   </div>
                   <h2 className="text-base font-bold text-foreground">
                     Consultorio IA
                   </h2>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                     ¿Para quién es la consulta?
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('auto')}
-                      className={`py-2 px-2 rounded-lg text-xs font-medium ${
+                      className={`py-1.5 px-2 rounded-lg text-xs font-medium ${
                         pacienteTipo === 'auto' ? greyBtnActive : greyBtn
                       }`}
                     >
@@ -1658,7 +1687,7 @@ export default function BotiquinAppClient({
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('pediatrico')}
-                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium ${
+                      className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg text-xs font-medium ${
                         pacienteTipo === 'pediatrico' ? greyBtnActive : greyBtn
                       }`}
                     >
@@ -1668,7 +1697,7 @@ export default function BotiquinAppClient({
                     <button
                       type="button"
                       onClick={() => setPacienteTipo('adulto')}
-                      className={`flex items-center justify-center space-x-1 py-2 px-2 rounded-lg text-xs font-medium ${
+                      className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg text-xs font-medium ${
                         pacienteTipo === 'adulto' ? greyBtnActive : greyBtn
                       }`}
                     >
@@ -1678,8 +1707,8 @@ export default function BotiquinAppClient({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground block">
                       Edad (opcional):
                     </label>
@@ -1692,11 +1721,11 @@ export default function BotiquinAppClient({
                       value={pacienteEdad}
                       onChange={(e) => setPacienteEdad(e.target.value.replace(/[^0-9]/g, ''))}
                       placeholder="Años"
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
+                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
                     />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground block">
                       Peso kg (opcional):
                     </label>
@@ -1709,17 +1738,17 @@ export default function BotiquinAppClient({
                       value={pacientePeso}
                       onChange={(e) => setPacientePeso(e.target.value.replace(/[^0-9.]/g, ''))}
                       placeholder="Kg"
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-2 text-xs text-foreground focus:border-primary focus:outline-none"
+                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Virtual Medical Robot Character filling the remaining space */}
-              <div className="mt-4 flex-1 flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-3 text-center">
+              {/* Virtual Medical Robot Character compactly fitting inside the card margins */}
+              <div className="mt-3 flex-1 min-h-0 flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-2 text-center overflow-hidden">
                 <svg
                   viewBox="0 0 180 145"
-                  className="h-28 w-36 drop-shadow-md"
+                  className="h-16 w-20 md:h-20 md:w-24 shrink-0 drop-shadow-md"
                   fill="none"
                   xmlns="http://www.w3.org/2000/svg"
                 >
@@ -1830,8 +1859,8 @@ export default function BotiquinAppClient({
                           <span>{msg.timestamp}</span>
                         </div>
 
-                        <div className="text-sm whitespace-pre-line leading-relaxed">
-                          {msg.text}
+                        <div className="text-sm leading-relaxed space-y-0.5">
+                          {renderFormattedChatText(msg.text)}
                         </div>
 
                         {/* Structured AI Sections */}
@@ -1858,10 +1887,11 @@ export default function BotiquinAppClient({
                                           </span>
                                         </div>
                                         <div className="text-xs text-zinc-300 mt-0.5">
-                                          <strong>Dosis recomendada:</strong> {rec.dosis_sugerida}
+                                          <strong>Dosis recomendada:</strong>{' '}
+                                          {renderInlineBold(rec.dosis_sugerida)}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5">
-                                          {rec.motivo} • Stock:{' '}
+                                          {renderInlineBold(rec.motivo)} • Stock:{' '}
                                           <strong>
                                             {rec.cantidad_actual} {rec.unidad}
                                           </strong>
@@ -1905,7 +1935,7 @@ export default function BotiquinAppClient({
                                 </h4>
                                 <ul className="list-disc list-inside text-xs text-red-200 space-y-0.5">
                                   {msg.aiData.advertencias_stock.map((adv, i) => (
-                                    <li key={i}>{adv}</li>
+                                    <li key={i}>{renderInlineBold(adv)}</li>
                                   ))}
                                 </ul>
                               </div>
@@ -1930,7 +1960,9 @@ export default function BotiquinAppClient({
                                           ({sug.droga} • {sug.publico})
                                         </span>
                                       </div>
-                                      <p className="text-zinc-300 mt-0.5">{sug.motivo}</p>
+                                      <p className="text-zinc-300 mt-0.5">
+                                        {renderInlineBold(sug.motivo)}
+                                      </p>
                                     </div>
                                   ))}
                                 </div>
@@ -1945,7 +1977,7 @@ export default function BotiquinAppClient({
                                 </strong>
                                 <ul className="list-disc list-inside space-y-0.5">
                                   {msg.aiData.pautas_alarma.map((p, i) => (
-                                    <li key={i}>{p}</li>
+                                    <li key={i}>{renderInlineBold(p)}</li>
                                   ))}
                                 </ul>
                               </div>
@@ -2012,147 +2044,152 @@ export default function BotiquinAppClient({
               </div>
               <button
                 onClick={openNewEsencialModal}
-                className={`shrink-0 flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                className="shrink-0 flex items-center justify-center rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-950 border border-zinc-300 px-3.5 py-1.5 text-xs font-semibold transition-colors shadow-sm"
               >
                 <span>+ Esencial</span>
               </button>
             </div>
 
             <div className="rounded-xl border border-[#323846] bg-[#171a22] overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#2c313f] bg-[#12151c] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      <th className="py-2.5 pl-4 pr-3">Categoría</th>
-                      <th className="py-2.5 px-3">Principal Activo</th>
-                      <th className="py-2.5 px-3">Público</th>
-                      <th className="py-2.5 px-3">Síntomas</th>
-                      <th className="py-2.5 px-3">Marcas sugeridas</th>
-                      <th className="py-2.5 pl-3 pr-4 text-right">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#262b38] text-xs">
-                    {sortedEsenciales.map((esc) => {
-                      const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
-                        esc,
-                        state.medicamentos
-                      )
-                      return (
-                        <tr
-                          key={esc.id}
-                          className={`transition-colors hover:bg-[#1c202b] ${
-                            !esc.activo ? 'opacity-50' : ''
-                          }`}
+              <table className="w-full table-fixed text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#2c313f] bg-[#12151c] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th className="w-[21%] py-2.5 pl-3.5 pr-2">Categoría</th>
+                    <th className="w-[17%] py-2.5 px-2">Principal Activo</th>
+                    <th className="w-[8%] py-2.5 px-1.5 text-center">Público</th>
+                    <th className="w-[24%] py-2.5 px-2">Síntomas</th>
+                    <th className="w-[18%] py-2.5 px-2">Marcas sugeridas</th>
+                    <th className="w-[12%] py-2.5 pl-2 pr-3.5 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#262b38] text-xs">
+                  {sortedEsenciales.map((esc) => {
+                    const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
+                      esc,
+                      state.medicamentos
+                    )
+                    return (
+                      <tr
+                        key={esc.id}
+                        className={`transition-colors hover:bg-[#1c202b] ${
+                          !esc.activo ? 'opacity-50' : ''
+                        }`}
+                      >
+                        {/* 1. Categoría: Grey tag if in stock, pastel red tag if missing */}
+                        <td className="py-2 pl-3.5 pr-2 align-middle">
+                          <span
+                            className={`inline-block rounded-lg px-2.5 py-1 text-xs font-semibold leading-snug text-white break-words ${
+                              cubierto
+                                ? 'bg-zinc-700 border border-zinc-500/60'
+                                : 'bg-[#f87171]/85 border border-red-300/40'
+                            }`}
+                            title={
+                              cubierto
+                                ? `En stock: ${medicamentosQueCubren
+                                    .map((m) => m.nombre)
+                                    .join(', ')}`
+                                : 'Sin stock disponible'
+                            }
+                          >
+                            {formatCategoriaEsencial(esc)}
+                          </span>
+                        </td>
+
+                        {/* 2. Principal Activo */}
+                        <td className="py-2 px-2 text-zinc-200 leading-snug break-words align-middle">
+                          {formatPrincipalActivoEsencial(esc)}
+                        </td>
+
+                        {/* 3. Público: Only emoji, 50% larger */}
+                        <td className="py-2 px-1.5 text-center align-middle">
+                          {esc.publico === 'pediatrico' ? (
+                            <span
+                              className="inline-block text-lg leading-none select-none"
+                              title="Bebé / Pediátrico"
+                            >
+                              👶
+                            </span>
+                          ) : esc.publico === 'ambos' ? (
+                            <span
+                              className="inline-block text-lg leading-none select-none"
+                              title="Familia"
+                            >
+                              👨‍👩‍👧
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-block text-lg leading-none select-none"
+                              title="Adultos"
+                            >
+                              🧑
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 4. Síntomas */}
+                        <td
+                          className="py-2 px-2 text-muted-foreground leading-snug break-words align-middle"
+                          title={esc.descripcion}
                         >
-                          {/* 1. Categoría */}
-                          <td className="py-2.5 pl-4 pr-3 font-semibold text-foreground whitespace-nowrap">
-                            <div className="flex items-center space-x-2">
-                              <span
-                                className={`h-2 w-2 rounded-full shrink-0 ${
-                                  cubierto ? 'bg-zinc-400' : 'bg-red-400'
-                                }`}
-                                title={
-                                  cubierto
-                                    ? `Cubierto por: ${medicamentosQueCubren
-                                        .map((m) => m.nombre)
-                                        .join(', ')}`
-                                    : 'Faltante en stock'
-                                }
-                              />
-                              <span>{formatCategoriaEsencial(esc)}</span>
-                            </div>
-                          </td>
+                          {formatSintomasEsencial(esc)}
+                        </td>
 
-                          {/* 2. Principal Activo */}
-                          <td className="py-2.5 px-3 text-zinc-200 whitespace-nowrap">
-                            {formatPrincipalActivoEsencial(esc)}
-                          </td>
+                        {/* 5. Marcas sugeridas */}
+                        <td
+                          className="py-2 px-2 text-zinc-300 leading-snug break-words align-middle"
+                          title={formatMarcasSugeridas(esc)}
+                        >
+                          {formatMarcasSugeridas(esc)}
+                        </td>
 
-                          {/* 3. Público */}
-                          <td className="py-2.5 px-3 whitespace-nowrap">
-                            {esc.publico === 'pediatrico' ? (
-                              <span className="inline-flex items-center space-x-1 text-sky-300 font-medium">
-                                <span>👶</span>
-                                <span>Bebé</span>
-                              </span>
-                            ) : esc.publico === 'ambos' ? (
-                              <span className="inline-flex items-center space-x-1 text-zinc-200 font-medium">
-                                <span>👨‍👩‍👧</span>
-                                <span>Familia</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center space-x-1 text-violet-300 font-medium">
-                                <span>🧑</span>
-                                <span>Adultos</span>
-                              </span>
-                            )}
-                          </td>
+                        {/* 6. Acciones: + Stock (Plus icon), Editar (Pencil icon), Eliminar (Trash icon) */}
+                        <td className="py-2 pl-2 pr-3.5 text-right align-middle">
+                          <div className="inline-flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openNewMedModal({
+                                  nombre: esc.nombre,
+                                  droga: esc.droga_sugerida,
+                                  publico: esc.publico,
+                                  categoria: esc.categoria,
+                                  unidad: esc.unidad_sugerida,
+                                  cantidad_actual: esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                  cantidad_inicial: esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                  es_esencial: true,
+                                  esencial_id: esc.id,
+                                })
+                              }
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="+ Stock"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
 
-                          {/* 4. Síntomas */}
-                          <td
-                            className="py-2.5 px-3 text-muted-foreground max-w-[230px] truncate"
-                            title={esc.descripcion}
-                          >
-                            {formatSintomasEsencial(esc)}
-                          </td>
+                            <button
+                              type="button"
+                              onClick={() => openEditEsencialModal(esc)}
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="Editar"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
 
-                          {/* 5. Marcas sugeridas */}
-                          <td
-                            className="py-2.5 px-3 text-zinc-300 max-w-[180px] truncate"
-                            title={formatMarcasSugeridas(esc)}
-                          >
-                            {formatMarcasSugeridas(esc)}
-                          </td>
-
-                          {/* 6. Acciones: + Stock (Plus icon), Editar (Pencil icon), Eliminar (Trash icon) */}
-                          <td className="py-2.5 pl-3 pr-4 text-right whitespace-nowrap">
-                            <div className="inline-flex items-center justify-end space-x-1.5">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  openNewMedModal({
-                                    nombre: esc.nombre,
-                                    droga: esc.droga_sugerida,
-                                    publico: esc.publico,
-                                    categoria: esc.categoria,
-                                    unidad: esc.unidad_sugerida,
-                                    cantidad_actual: esc.unidad_sugerida === 'ml' ? 100 : 10,
-                                    cantidad_inicial: esc.unidad_sugerida === 'ml' ? 100 : 10,
-                                    es_esencial: true,
-                                    esencial_id: esc.id,
-                                  })
-                                }
-                                className={`p-1.5 rounded-lg ${greyBtn}`}
-                                title="+ Stock"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => openEditEsencialModal(esc)}
-                                className={`p-1.5 rounded-lg ${greyBtn}`}
-                                title="Editar"
-                              >
-                                <Edit3 className="h-3.5 w-3.5" />
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
-                                className={`p-1.5 rounded-lg ${greyBtn}`}
-                                title="Eliminar"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="Eliminar"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
