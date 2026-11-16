@@ -327,6 +327,202 @@ export function obtenerEmojiFamiliar(miembro: {
   return gen === 'femenino' ? '👩' : '👨'
 }
 
+export interface DosisPediatricaCalculada {
+  dosisTexto: string
+  cantidadSugerida: number | null
+  formula: string
+}
+
+export function calcularDosisPediatricaPorPeso(
+  med: {
+    nombre?: string
+    droga?: string
+    concentracion?: string
+    publico?: PublicoObjetivo
+    unidad?: UnidadMedida
+  },
+  pesoKg: number | null | undefined
+): DosisPediatricaCalculada | null {
+  if (!pesoKg || pesoKg <= 0) return null
+  if (med.publico === 'adulto') return null
+
+  const texto = normalizeText(`${med.nombre || ''} ${med.droga || ''} ${med.concentracion || ''}`)
+  const peso = Number(pesoKg)
+
+  // 1. Ibuprofeno Pediátrico (4% = 40mg/ml o 2% = 20mg/ml)
+  if (texto.includes('ibuprofeno') || texto.includes('actron') || texto.includes('ibupirac')) {
+    const es4Porciento =
+      texto.includes('4%') ||
+      texto.includes('4 %') ||
+      texto.includes('4g') ||
+      texto.includes('4 g') ||
+      texto.includes('40mg') ||
+      texto.includes('40 mg') ||
+      texto.includes('200 mg/5') ||
+      texto.includes('200mg/5')
+
+    if (es4Porciento) {
+      // 4% (40 mg/ml): 5 a 10 mg/kg/dosis -> peso * 0.125 a peso * 0.25 ml (regla práctica: peso / 4 ml)
+      const mlMin = Number((peso * 0.125).toFixed(1))
+      const mlMax = Number((peso * 0.25).toFixed(1))
+      return {
+        dosisTexto: `${mlMin} a ${mlMax} ml cada 6–8 hs`,
+        cantidadSugerida: mlMax,
+        formula: 'Ibuprofeno 4% (5–10 mg/kg/dosis)',
+      }
+    } else {
+      // 2% (20 mg/ml): 5 a 10 mg/kg/dosis -> peso * 0.25 a peso * 0.5 ml
+      const mlMin = Number((peso * 0.25).toFixed(1))
+      const mlMax = Number((peso * 0.5).toFixed(1))
+      return {
+        dosisTexto: `${mlMin} a ${mlMax} ml cada 6–8 hs`,
+        cantidadSugerida: mlMax,
+        formula: 'Ibuprofeno 2% (5–10 mg/kg/dosis)',
+      }
+    }
+  }
+
+  // 2. Paracetamol Pediátrico (Gotas 10% = 100mg/ml o Jarabe 100-120mg/5ml)
+  if (
+    texto.includes('paracetamol') ||
+    texto.includes('tafirolito') ||
+    texto.includes('termofren') ||
+    texto.includes('febratic')
+  ) {
+    if (med.unidad === 'gotas' || texto.includes('gotas') || texto.includes('10%')) {
+      // Gotas 10%: 2 a 3 gotas por kg cada 6 hs
+      const gotasMin = Math.round(peso * 2)
+      const gotasMax = Math.round(peso * 3)
+      return {
+        dosisTexto: `${gotasMin} a ${gotasMax} gotas cada 6 hs`,
+        cantidadSugerida: gotasMax,
+        formula: 'Paracetamol gotas (10–15 mg/kg = 2–3 gotas/kg)',
+      }
+    } else {
+      // Jarabe (24 mg/ml o 20 mg/ml): ~0.5 ml por kg cada 6 hs
+      const mlDosis = Number((peso * 0.5).toFixed(1))
+      return {
+        dosisTexto: `${mlDosis} ml cada 6 hs`,
+        cantidadSugerida: mlDosis,
+        formula: 'Paracetamol jarabe (10–12 mg/kg/dosis)',
+      }
+    }
+  }
+
+  // 3. Amoxicilina Suspensión (500 mg / 5 ml o 250 mg / 5 ml)
+  if (texto.includes('amoxicilina') || texto.includes('amoxidal') || texto.includes('optamox')) {
+    if (med.unidad === 'ml' || texto.includes('5 ml') || texto.includes('5ml') || texto.includes('suspension')) {
+      const es250 = texto.includes('250')
+      const mgPorMl = es250 ? 50 : 100 // 500mg/5ml = 100mg/ml
+      // Dosis estándar pediátrica: 50 a 80 mg/kg/día dividido en 3 tomas (cada 8 hs)
+      const mlCada8Min = Number(((peso * 50) / 3 / mgPorMl).toFixed(1))
+      const mlCada8Max = Number(((peso * 80) / 3 / mgPorMl).toFixed(1))
+      return {
+        dosisTexto: `${mlCada8Min} a ${mlCada8Max} ml cada 8 hs`,
+        cantidadSugerida: mlCada8Min,
+        formula: `Amoxicilina ${es250 ? '250mg/5ml' : '500mg/5ml'} (50–80 mg/kg/día ÷ 3 tomas)`,
+      }
+    }
+  }
+
+  // 4. Difenhidramina (Benadryl) Jarabe (12.5 mg / 5 ml = 2.5 mg/ml)
+  if (texto.includes('difenhidramina') || texto.includes('benadryl')) {
+    // 1 mg/kg/dosis -> peso * 0.4 ml cada 6-8 hs
+    const mlDosis = Number((peso * 0.4).toFixed(1))
+    return {
+      dosisTexto: `${mlDosis} ml cada 6–8 hs`,
+      cantidadSugerida: mlDosis,
+      formula: 'Difenhidramina (1 mg/kg/dosis)',
+    }
+  }
+
+  return null
+}
+
+export interface ItemViajeExtra {
+  id: string
+  nombre: string
+  droga_sugerida: string
+  publico: PublicoObjetivo
+  descripcion: string
+  keywords: string[]
+}
+
+export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
+  {
+    id: 'viaje-mareos',
+    nombre: 'Anticinetósico (Mareos en ruta / avión / barco)',
+    droga_sugerida: 'Dimenhidrinato (Dramamine)',
+    publico: 'ambos',
+    descripcion: 'Prevenir náuseas y mareos por movimiento durante el viaje.',
+    keywords: ['dramamine', 'dimenhidrinato', 'mareo', 'cinetosis'],
+  },
+  {
+    id: 'viaje-protector-solar',
+    nombre: 'Protector Solar FPS 50+',
+    droga_sugerida: 'Pantalla Solar Pediátrica / Familiar',
+    publico: 'ambos',
+    descripcion: 'Protección solar para paseos al aire libre, playa o montaña.',
+    keywords: ['protector solar', 'fps', 'dermaglos solar', 'pantalla solar', 'anthelios', 'isdin'],
+  },
+  {
+    id: 'viaje-post-solar',
+    nombre: 'Post Solar / Crema para Quemaduras',
+    droga_sugerida: 'Aloe Vera / Vitamina A / Sulfadiazina de Plata (Platsul)',
+    publico: 'ambos',
+    descripcion: 'Alivio de quemaduras solares, irritaciones o escaldaduras.',
+    keywords: ['post solar', 'aloe', 'platsul', 'hipoglos', 'dermaglos', 'caladryl', 'quemadura'],
+  },
+  {
+    id: 'viaje-repelente',
+    nombre: 'Repelente de Insectos',
+    droga_sugerida: 'DEET / Icaridina / Citronella (según edad)',
+    publico: 'ambos',
+    descripcion: 'Prevención de picaduras de mosquitos e insectos.',
+    keywords: ['repelente', 'off', 'exposis', 'icaridina', 'citronella', 'mosquito'],
+  },
+  {
+    id: 'viaje-post-picaduras',
+    nombre: 'Gel Post-Picaduras / Corticoide Tópico',
+    droga_sugerida: 'Difenhidramina tópica (Caladryl) / Hidrocortisona',
+    publico: 'ambos',
+    descripcion: 'Picazón e inflamación local por picaduras de insectos o plantas.',
+    keywords: ['caladryl', 'hidrocortisona', 'betacort', 'picadura', ' Mometasona'],
+  },
+  {
+    id: 'viaje-gotas-oticas',
+    nombre: 'Gotas Óticas (Pileta / Mar)',
+    droga_sugerida: 'Ciprofloxacina + Hidrocortisona / Alcohol Boricado',
+    publico: 'ambos',
+    descripcion: 'Dolor de oído u otitis externa tras meterse a la pileta o al mar.',
+    keywords: ['otic', 'otex', 'valmax', 'ciriax otic', 'sincerum', 'oido'],
+  },
+  {
+    id: 'viaje-curitas-gasas',
+    nombre: 'Curitas, Gasas Estériles y Cinta',
+    droga_sugerida: 'Apósitos adhesivos y gasas',
+    publico: 'ambos',
+    descripcion: 'Raspaduras, ampollas por caminatas y pequeños cortes.',
+    keywords: ['curitas', 'gasas', 'venda', 'apósito', 'aposito', 'tela adhesiva'],
+  },
+  {
+    id: 'viaje-termometro',
+    nombre: 'Termómetro Digital',
+    droga_sugerida: 'Termómetro clínico',
+    publico: 'ambos',
+    descripcion: 'Controlar fiebre fuera de casa.',
+    keywords: ['termometro'],
+  },
+  {
+    id: 'viaje-probiotico-diarrea',
+    nombre: 'Probiótico / Flora Intestinal (Diarrea del viajero)',
+    droga_sugerida: 'Bacillus clausii (Enterogermina) / Saccharomyces (Floratil)',
+    publico: 'ambos',
+    descripcion: 'Gastroenteritis o cambios de agua/comida durante las vacaciones.',
+    keywords: ['enterogermina', 'floratil', 'probiotico', 'loperamida', 'suprasec'],
+  },
+]
+
 /**
  * Deduplicates essentials and only adds truly new categories/drugs not already covered
  * by the existing catalog, and links any matching medications in stock.

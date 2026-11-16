@@ -39,12 +39,17 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  Plane,
+  Copy,
+  Share2,
+  Calculator,
 } from 'lucide-react'
 import {
   AlertaActiva,
   BotiquinConfig,
   BotiquinState,
   calcularDiasVencimiento,
+  calcularDosisPediatricaPorPeso,
   calcularEdadDesdeFecha,
   calcularStockMinimoPorDefecto,
   detectarGeneroPorNombre,
@@ -52,9 +57,11 @@ import {
   CATEGORIAS_MEDICAMENTOS,
   esMedicamentoProximoAVencer,
   esMedicamentoVencido,
+  ITEMS_VIAJE_EXTRA,
   Medicamento,
   MiembroFamilia,
   MotivoBaja,
+  normalizeText,
   obtenerEmojiFamiliar,
   ProductoEsencial,
   PublicoObjetivo,
@@ -389,6 +396,40 @@ export default function BotiquinAppClient({
   const [configForm, setConfigForm] = useState<BotiquinConfig>(initialState.config)
   const [savingConfig, setSavingConfig] = useState(false)
 
+  // Shopping List Modal (1-Click Pharmacy List for WhatsApp)
+  const [shoppingModalOpen, setShoppingModalOpen] = useState(false)
+  const [includeViajeInShopping, setIncludeViajeInShopping] = useState(false)
+  const [excludedShoppingKeys, setExcludedShoppingKeys] = useState<string[]>([])
+  const [customShoppingNote, setCustomShoppingNote] = useState('')
+
+  // Travel / Vacation Checklist Modal (Airplane button in Esenciales)
+  const [viajeModalOpen, setViajeModalOpen] = useState(false)
+  const [packedViajeIds, setPackedViajeIds] = useState<string[]>([])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const savedPacked = window.localStorage.getItem('botiquin_viaje_packed')
+      if (savedPacked) {
+        setPackedViajeIds(JSON.parse(savedPacked))
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  function togglePackedViajeItem(id: string) {
+    setPackedViajeIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      try {
+        window.localStorage.setItem('botiquin_viaje_packed', JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
+
   // Register Service Worker & listen for PWA beforeinstallprompt
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -585,6 +626,14 @@ export default function BotiquinAppClient({
           setEsencialModalOpen(false)
           return
         }
+        if (shoppingModalOpen) {
+          setShoppingModalOpen(false)
+          return
+        }
+        if (viajeModalOpen) {
+          setViajeModalOpen(false)
+          return
+        }
         if (medModalOpen) {
           setMedModalOpen(false)
           return
@@ -601,6 +650,8 @@ export default function BotiquinAppClient({
     bajaModalMed,
     familiarModalOpen,
     esencialModalOpen,
+    shoppingModalOpen,
+    viajeModalOpen,
     medModalOpen,
   ])
 
@@ -676,6 +727,140 @@ export default function BotiquinAppClient({
       esencialesTotal: esencialesActivos.length,
     }
   }, [state])
+
+  // Travel / Vacation Checklist (Esenciales + Extra Travel-Specific items)
+  const viajeChecklist = useMemo(() => {
+    const activosVigentes = state.medicamentos.filter(
+      (m) => m.estado === 'activo' && m.cantidad_actual > 0 && !esMedicamentoVencido(m)
+    )
+
+    const itemsEsenciales = sortedEsenciales
+      .filter((e) => e.activo)
+      .map((esc) => {
+        const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
+          esc,
+          state.medicamentos
+        )
+        return {
+          id: `esc:${esc.id}`,
+          origen: 'esencial' as const,
+          nombre: formatCategoriaEsencial(esc),
+          droga: formatPrincipalActivoEsencial(esc),
+          publico: esc.publico,
+          descripcion: formatSintomasEsencial(esc),
+          cubierto,
+          stockDetalle: medicamentosQueCubren
+            .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
+            .join(', '),
+        }
+      })
+
+    const itemsExtras = ITEMS_VIAJE_EXTRA.filter((extra) => {
+      // Avoid duplicating if already in sortedEsenciales (e.g. Gotas Óticas)
+      return !itemsEsenciales.some((ie) =>
+        extra.keywords.some((kw) => normalizeText(ie.nombre).includes(normalizeText(kw)))
+      )
+    }).map((extra) => {
+      const matches = activosVigentes.filter((m) => {
+        const text = normalizeText(`${m.nombre} ${m.droga} ${m.para_que_sirve} ${m.categoria}`)
+        return extra.keywords.some((kw) => text.includes(normalizeText(kw)))
+      })
+      return {
+        id: `extra:${extra.id}`,
+        origen: 'viaje' as const,
+        nombre: extra.nombre,
+        droga: extra.droga_sugerida,
+        publico: extra.publico,
+        descripcion: extra.descripcion,
+        cubierto: matches.length > 0,
+        stockDetalle: matches
+          .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
+          .join(', '),
+      }
+    })
+
+    return [...itemsEsenciales, ...itemsExtras]
+  }, [sortedEsenciales, state.medicamentos])
+
+  // Pharmacy Shopping List (Esenciales faltantes + Vencidos / Sin Stock + optional Viaje extras)
+  const shoppingListItems = useMemo(() => {
+    const list: {
+      key: string
+      titulo: string
+      subtitulo: string
+      motivo: 'Esencial faltante' | 'Reponer (Sin stock / Vencido)' | 'Botiquín de viaje'
+    }[] = []
+
+    // 1. Missing Esenciales
+    for (const esc of sortedEsenciales.filter((e) => e.activo)) {
+      const { cubierto } = verificarCoberturaEsencial(esc, state.medicamentos)
+      if (!cubierto) {
+        const pubLabel =
+          esc.publico === 'pediatrico'
+            ? '👶 Bebé/Niño'
+            : esc.publico === 'adulto'
+            ? '🧑 Adulto'
+            : '👨‍👩‍👧 Familia'
+        const marcas = formatMarcasSugeridas(esc)
+        list.push({
+          key: `esc-${esc.id}`,
+          titulo: `${formatCategoriaEsencial(esc)} (${pubLabel})`,
+          subtitulo: `${formatPrincipalActivoEsencial(esc)}${
+            marcas && marcas !== '-' ? ` • Ej: ${marcas}` : ''
+          }`,
+          motivo: 'Esencial faltante',
+        })
+      }
+    }
+
+    // 2. Expired or Zero-Stock Medications in Stock
+    for (const med of state.medicamentos.filter((m) => m.estado === 'activo')) {
+      const venc = esMedicamentoVencido(med)
+      const agotado = med.cantidad_actual <= 0
+      if (venc || agotado) {
+        list.push({
+          key: `med-${med.id}`,
+          titulo: formatEspacioMedida(med.nombre),
+          subtitulo: `${formatEspacioMedida(med.droga) || med.categoria} (${
+            venc ? 'Vencido' : 'Sin stock'
+          })`,
+          motivo: 'Reponer (Sin stock / Vencido)',
+        })
+      }
+    }
+
+    // 3. Optional Travel Missing Items
+    if (includeViajeInShopping) {
+      for (const v of viajeChecklist) {
+        if (v.origen === 'viaje' && !v.cubierto) {
+          list.push({
+            key: v.id,
+            titulo: v.nombre,
+            subtitulo: v.droga,
+            motivo: 'Botiquín de viaje',
+          })
+        }
+      }
+    }
+
+    return list
+  }, [sortedEsenciales, state.medicamentos, includeViajeInShopping, viajeChecklist])
+
+  function buildShoppingWhatsAppText(): string {
+    const selected = shoppingListItems.filter((item) => !excludedShoppingKeys.includes(item.key))
+    const lines: string[] = ['🛒 *Lista de Farmacia - Botiquín Familiar*']
+    if (selected.length > 0) {
+      lines.push('')
+      for (const item of selected) {
+        lines.push(`• *${item.titulo}* — ${item.subtitulo}`)
+      }
+    }
+    if (customShoppingNote.trim()) {
+      lines.push('')
+      lines.push(`📝 *Nota:* ${customShoppingNote.trim()}`)
+    }
+    return lines.join('\n')
+  }
 
   // Filtered medications list
   const filteredMeds = useMemo(() => {
@@ -1496,7 +1681,7 @@ export default function BotiquinAppClient({
             </a>
 
             {/* Desktop Nav Links: Stock | Consultorio IA | Configuración */}
-            <div className="hidden md:flex items-center space-x-2">
+            <div className="hidden lg:flex items-center space-x-2">
               <a
                 href="/?tab=stock"
                 onClick={(e) => handleTabNavClick(e, 'stock')}
@@ -1538,7 +1723,7 @@ export default function BotiquinAppClient({
             </div>
           </div>
 
-          <div className="hidden md:flex items-center space-x-3">
+          <div className="hidden lg:flex items-center space-x-3">
             <button
               onClick={() => openNewMedModal()}
               className="flex items-center space-x-1.5 rounded-xl bg-primary/15 border border-primary/40 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25 shadow-sm transition-colors"
@@ -1557,8 +1742,8 @@ export default function BotiquinAppClient({
             </form>
           </div>
 
-          {/* Mobile Header Right */}
-          <div className="flex md:hidden items-center space-x-2">
+          {/* Mobile & Mobile-Landscape Header Right (conserves Hamburger Menu) */}
+          <div className="flex lg:hidden items-center space-x-2">
             <button
               onClick={() => openNewMedModal()}
               className="flex items-center space-x-1 rounded-xl bg-primary/15 border border-primary/40 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/25 transition-colors"
@@ -1577,7 +1762,7 @@ export default function BotiquinAppClient({
 
         {/* Mobile Hamburger Dropdown Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-[#383e4e] mt-2.5 pt-2.5 pb-2 flex flex-col space-y-1.5 max-h-[75dvh] overflow-y-auto">
+          <div className="lg:hidden border-t border-[#383e4e] mt-2.5 pt-2.5 pb-2 flex flex-col space-y-1.5 max-h-[75dvh] overflow-y-auto">
             <a
               href="/?tab=stock"
               onClick={(e) => handleTabNavClick(e, 'stock')}
@@ -1767,34 +1952,51 @@ export default function BotiquinAppClient({
                 </div>
               </div>
 
-              {/* Status Filter Tabs */}
-              <div className="flex items-center space-x-2 overflow-x-auto pt-2 border-t border-[#2c313f]">
-                {[
-                  { id: 'activos', label: 'Stock actual' },
-                  { id: 'proximo_vencer', label: 'Próximos a vencer' },
-                  { id: 'vencidos_sin_stock', label: 'Vencidos / Sin stock' },
-                  { id: 'bajas', label: 'Bajas' },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() =>
-                      setFilterEstado(
-                        tab.id as
-                          | 'activos'
-                          | 'proximo_vencer'
-                          | 'vencidos_sin_stock'
-                          | 'bajas'
-                      )
-                    }
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                      filterEstado === tab.id
-                        ? 'bg-zinc-700 text-white font-semibold border border-zinc-500/80'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800/60'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+              {/* Status Filter Tabs + 1-Click Pharmacy Shopping List Button */}
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#2c313f]">
+                <div className="flex items-center space-x-2 overflow-x-auto">
+                  {[
+                    { id: 'activos', label: 'Stock actual' },
+                    { id: 'proximo_vencer', label: 'Próximos a vencer' },
+                    { id: 'vencidos_sin_stock', label: 'Vencidos / Sin stock' },
+                    { id: 'bajas', label: 'Bajas' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() =>
+                        setFilterEstado(
+                          tab.id as
+                            | 'activos'
+                            | 'proximo_vencer'
+                            | 'vencidos_sin_stock'
+                            | 'bajas'
+                        )
+                      }
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                        filterEstado === tab.id
+                          ? 'bg-zinc-700 text-white font-semibold border border-zinc-500/80'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800/60'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShoppingModalOpen(true)}
+                  title="Lista de Compras de Farmacia (Compartir por WhatsApp)"
+                  className={`shrink-0 flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  <ShoppingBag className="h-3.5 w-3.5 text-primary" />
+                  <span>Compras</span>
+                  {shoppingListItems.length > 0 && (
+                    <span className="rounded-full bg-primary/20 border border-primary/40 text-primary px-1.5 py-0.2 text-[10px] font-bold">
+                      {shoppingListItems.length}
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -2016,10 +2218,69 @@ export default function BotiquinAppClient({
                                 isDosisOpen
                                   ? 'block'
                                   : 'hidden md:group-hover/dosis:block'
-                              } z-50 w-max max-w-[250px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
+                              } z-50 w-max max-w-[270px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
                             >
                               <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
-                              {med.posologia_referencia || 'Sin especificar'}
+                              <span>{med.posologia_referencia || 'Sin especificar'}</span>
+                              {(() => {
+                                const miembrosPediatricosConPeso = (state.familia || []).filter(
+                                  (f) =>
+                                    f.peso_kg &&
+                                    f.peso_kg > 0 &&
+                                    calcularEdadDesdeFecha(f.fecha_nacimiento).esPediatrico
+                                )
+                                const todosConPeso =
+                                  miembrosPediatricosConPeso.length > 0
+                                    ? miembrosPediatricosConPeso
+                                    : (state.familia || []).filter(
+                                        (f) => f.peso_kg && f.peso_kg > 0 && f.peso_kg <= 40
+                                      )
+
+                                if (todosConPeso.length > 0) {
+                                  const calculos = todosConPeso
+                                    .map((f) => ({
+                                      miembro: f,
+                                      calc: calcularDosisPediatricaPorPeso(med, f.peso_kg),
+                                    }))
+                                    .filter((x) => x.calc !== null)
+
+                                  if (calculos.length === 0) return null
+                                  return (
+                                    <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-1">
+                                      <strong className="text-emerald-300 text-[11px] block">
+                                        🧮 Dosis sugerida por peso:
+                                      </strong>
+                                      {calculos.map(({ miembro, calc }) => (
+                                        <span
+                                          key={miembro.id}
+                                          className="block text-[11px] text-zinc-200"
+                                        >
+                                          {obtenerEmojiFamiliar(miembro)} <strong>{miembro.nombre}</strong> ({miembro.peso_kg} kg):{' '}
+                                          <strong className="text-white">{calc!.dosisTexto}</strong>
+                                        </span>
+                                      ))}
+                                    </span>
+                                  )
+                                }
+
+                                // Referencia por peso 10 kg / 15 kg si es pediátrico y aún no cargaron peso
+                                const ref10 = calcularDosisPediatricaPorPeso(med, 10)
+                                const ref15 = calcularDosisPediatricaPorPeso(med, 15)
+                                if (!ref10 || !ref15) return null
+                                return (
+                                  <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-0.5">
+                                    <strong className="text-emerald-300 text-[11px] block">
+                                      🧮 Guía rápida por peso ({ref10.formula}):
+                                    </strong>
+                                    <span className="block text-[11px] text-zinc-200">
+                                      • 10 kg: <strong>{ref10.dosisTexto}</strong>
+                                    </span>
+                                    <span className="block text-[11px] text-zinc-200">
+                                      • 15 kg: <strong>{ref15.dosisTexto}</strong>
+                                    </span>
+                                  </span>
+                                )
+                              })()}
                             </span>
                           </button>
 
@@ -2860,21 +3121,40 @@ export default function BotiquinAppClient({
             {/* ------------------------------------------------------------- */}
             {configSubTab === 'esenciales' && (
               <div className="space-y-3">
-                {/* Header without 'Adaptar' button */}
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
-                  <div className="flex items-center space-x-2">
+                {/* Header with Airplane Button (Botiquín de Viaje), Shopping List & '+ Esencial' */}
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+                  <div className="flex items-center space-x-2 min-w-0">
                     <Star className="h-4 w-4 text-primary shrink-0" />
-                    <h2 className="text-sm font-bold text-foreground">Esenciales</h2>
-                    <span className="text-xs text-muted-foreground">
+                    <h2 className="text-sm font-bold text-foreground truncate">Esenciales</h2>
+                    <span className="text-xs text-muted-foreground shrink-0">
                       ({kpis.esencialesCubiertos} de {kpis.esencialesTotal} cubiertos)
                     </span>
                   </div>
-                  <button
-                    onClick={openNewEsencialModal}
-                    className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
-                  >
-                    <span>+ Esencial</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShoppingModalOpen(true)}
+                      title="Lista de Compras de Farmacia (Compartir por WhatsApp)"
+                      className={`flex items-center justify-center rounded-lg p-1.5 text-xs font-semibold ${greyBtn}`}
+                    >
+                      <ShoppingBag className="h-4 w-4 text-primary" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViajeModalOpen(true)}
+                      title="Botiquín de Viaje / Vacaciones (Checklist)"
+                      aria-label="Botiquín de Viaje"
+                      className={`flex items-center justify-center rounded-lg p-1.5 text-xs font-semibold ${greyBtn}`}
+                    >
+                      <Plane className="h-4 w-4 text-sky-300" />
+                    </button>
+                    <button
+                      onClick={openNewEsencialModal}
+                      className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
+                    >
+                      <span>+ Esencial</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* MOBILE & SMALL SCREENS VIEW (Clean responsive cards, zero overlapping) */}
@@ -3306,8 +3586,8 @@ export default function BotiquinAppClient({
         )}
       </main>
 
-      {/* Mobile Bottom Navigation Bar (3 main sections, compact in landscape) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 landscape:py-1 grid grid-cols-3 gap-1">
+      {/* Mobile Bottom Navigation Bar (hidden in landscape to keep horizontal screen clean with hamburger menu) */}
+      <div className="md:hidden landscape:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 grid grid-cols-3 gap-1">
         <a
           href="/?tab=stock"
           onClick={(e) => handleTabNavClick(e, 'stock')}
@@ -4002,6 +4282,39 @@ export default function BotiquinAppClient({
                       Otro
                     </button>
                   </div>
+
+                  {/* Calculadora Rápida de Dosis Pediátrica por Peso (mg/kg) */}
+                  {(() => {
+                    const miembroSel = (state.familia || []).find((f) => f.id === dosisFamiliarId)
+                    if (!miembroSel || !miembroSel.peso_kg) return null
+                    const calc = calcularDosisPediatricaPorPeso(dosisModalMed, miembroSel.peso_kg)
+                    if (!calc) return null
+                    return (
+                      <div className="mt-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 flex items-center justify-between gap-2 text-xs">
+                        <div>
+                          <div className="font-semibold text-emerald-300 flex items-center gap-1">
+                            <Calculator className="h-3.5 w-3.5 shrink-0" />
+                            <span>
+                              Dosis sugerida para {miembroSel.nombre} ({miembroSel.peso_kg} kg):{' '}
+                              <strong className="text-white">{calc.dosisTexto}</strong>
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-zinc-300 mt-0.5">
+                            {calc.formula}
+                          </p>
+                        </div>
+                        {calc.cantidadSugerida !== null && (
+                          <button
+                            type="button"
+                            onClick={() => setDosisCantidad(calc.cantidadSugerida!)}
+                            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-semibold ${greyBtn}`}
+                          >
+                            Usar {calc.cantidadSugerida} {dosisModalMed.unidad}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
 
@@ -4421,6 +4734,355 @@ export default function BotiquinAppClient({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: BOTIQUÍN DE VIAJE / VACACIONES (CHECKLIST VISUAL)              */}
+      {/* ===================================================================== */}
+      {viajeModalOpen && (
+        <div
+          onClick={() => setViajeModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e] shrink-0">
+              <div className="flex items-center space-x-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/15 border border-sky-400/40 text-sky-300">
+                  <Plane className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">
+                    Botiquín de Viaje / Vacaciones
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Esenciales de tu familia + adicionales exclusivos para viajes
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setViajeModalOpen(false)}
+                className={`p-1.5 rounded-lg ${greyBtn}`}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Summary KPIs */}
+            {(() => {
+              const totalViaje = viajeChecklist.length
+              const enStockCount = viajeChecklist.filter((i) => i.cubierto).length
+              const faltantesCount = totalViaje - enStockCount
+              const enValijaCount = viajeChecklist.filter((i) =>
+                packedViajeIds.includes(i.id)
+              ).length
+
+              return (
+                <div className="grid grid-cols-3 gap-2 my-3 shrink-0">
+                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
+                    <span className="text-[11px] text-muted-foreground block">Ya tenés</span>
+                    <strong className="text-sm text-emerald-300">
+                      {enStockCount} / {totalViaje}
+                    </strong>
+                  </div>
+                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
+                    <span className="text-[11px] text-muted-foreground block">Te faltan</span>
+                    <strong className="text-sm text-primary">{faltantesCount}</strong>
+                  </div>
+                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
+                    <span className="text-[11px] text-muted-foreground block">En valija</span>
+                    <strong className="text-sm text-sky-300">
+                      {enValijaCount} / {totalViaje}
+                    </strong>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Checklist Items */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {viajeChecklist.map((item) => {
+                const isPacked = packedViajeIds.includes(item.id)
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-xl border p-3 transition-colors flex items-start justify-between gap-3 ${
+                      item.cubierto
+                        ? 'border-[#343a48] bg-[#161922]'
+                        : 'border-primary/35 bg-primary/5'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={isPacked}
+                        onChange={() => togglePackedViajeItem(item.id)}
+                        title="Marcar como guardado en el bolso / valija"
+                        className="mt-1 h-4 w-4 rounded border-[#4a5264] accent-[#f87171] cursor-pointer shrink-0"
+                      />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center flex-wrap gap-1.5">
+                          <span
+                            className={`text-xs font-bold ${
+                              isPacked ? 'line-through text-muted-foreground' : 'text-foreground'
+                            }`}
+                          >
+                            {item.nombre}
+                          </span>
+                          <span className="text-sm leading-none select-none">
+                            {item.publico === 'pediatrico'
+                              ? '👶'
+                              : item.publico === 'ambos'
+                              ? '👨‍👩‍👧'
+                              : '🧑'}
+                          </span>
+                          {item.origen === 'viaje' && (
+                            <span className="rounded-md bg-sky-500/15 border border-sky-400/30 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
+                              ✈️ Extra Viaje
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-muted-foreground">
+                          <strong className="text-zinc-300">{item.droga}</strong> • {item.descripcion}
+                        </p>
+
+                        {item.cubierto ? (
+                          <div className="text-[11px] text-emerald-300 font-medium">
+                            ✓ En stock: {item.stockDetalle}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-red-300">
+                            Falta en el botiquín
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${
+                          item.cubierto
+                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-primary/15 text-primary border border-primary/40'
+                        }`}
+                      >
+                        {item.cubierto ? '✓ Tenés' : 'Falta'}
+                      </span>
+
+                      {!item.cubierto && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViajeModalOpen(false)
+                            openNewMedModal({
+                              nombre: item.nombre,
+                              droga: item.droga,
+                              publico: item.publico,
+                            })
+                          }}
+                          title="Cargar en Stock"
+                          className={`p-1.5 rounded-lg ${greyBtn}`}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 mt-3 border-t border-[#383f4e] shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setPackedViajeIds([])
+                  try {
+                    window.localStorage.removeItem('botiquin_viaje_packed')
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+              >
+                Reiniciar valija
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIncludeViajeInShopping(true)
+                    setViajeModalOpen(false)
+                    setShoppingModalOpen(true)
+                  }}
+                  className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  <ShoppingBag className="h-3.5 w-3.5 text-primary" />
+                  <span>Comprar faltantes</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViajeModalOpen(false)}
+                  className={`rounded-xl px-4 py-1.5 text-xs font-semibold ${greyBtnActive}`}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: LISTA DE COMPRAS DE FARMACIA EN 1 CLIC (WHATSAPP)              */}
+      {/* ===================================================================== */}
+      {shoppingModalOpen && (
+        <div
+          onClick={() => setShoppingModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg max-h-[90dvh] flex flex-col rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e] shrink-0">
+              <div className="flex items-center space-x-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/15 border border-primary/40 text-primary">
+                  <ShoppingBag className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">
+                    Lista de Compras de Farmacia
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Faltantes, por vencer y agotados listos para enviar por WhatsApp
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShoppingModalOpen(false)}
+                className={`p-1.5 rounded-lg ${greyBtn}`}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Option to include Travel Checklist missing items */}
+            <div className="py-2.5 border-b border-[#343a48] flex items-center justify-between gap-2 shrink-0">
+              <label className="flex items-center space-x-2 text-xs text-zinc-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeViajeInShopping}
+                  onChange={(e) => setIncludeViajeInShopping(e.target.checked)}
+                  className="h-4 w-4 rounded border-[#4a5264] accent-[#f87171]"
+                />
+                <span>✈️ Sumar faltantes del Botiquín de Viaje</span>
+              </label>
+              <span className="text-[11px] text-muted-foreground">
+                {
+                  shoppingListItems.filter((i) => !excludedShoppingKeys.includes(i.key))
+                    .length
+                }{' '}
+                seleccionados
+              </span>
+            </div>
+
+            {/* Items list */}
+            <div className="flex-1 overflow-y-auto space-y-2 my-3 pr-1">
+              {shoppingListItems.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[#383f4e] bg-[#161922] p-6 text-center text-xs text-muted-foreground">
+                  ¡Tu botiquín está al día! No hay medicamentos esenciales faltantes ni productos agotados.
+                </div>
+              ) : (
+                shoppingListItems.map((item) => {
+                  const included = !excludedShoppingKeys.includes(item.key)
+                  return (
+                    <label
+                      key={item.key}
+                      className={`flex items-start gap-2.5 rounded-xl border p-2.5 cursor-pointer transition-colors ${
+                        included
+                          ? 'border-[#383f4e] bg-[#161922]'
+                          : 'border-[#2c313f] bg-[#12151c] opacity-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={included}
+                        onChange={() =>
+                          setExcludedShoppingKeys((prev) =>
+                            prev.includes(item.key)
+                              ? prev.filter((k) => k !== item.key)
+                              : [...prev, item.key]
+                          )
+                        }
+                        className="mt-0.5 h-4 w-4 rounded border-[#4a5264] accent-[#f87171] shrink-0"
+                      />
+                      <div className="min-w-0 flex-1 text-xs">
+                        <div className="font-semibold text-foreground flex items-center flex-wrap gap-1.5">
+                          <span>{item.titulo}</span>
+                          <span className="rounded bg-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-200 font-normal">
+                            {item.motivo}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">{item.subtitulo}</p>
+                      </div>
+                    </label>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Extra note */}
+            <div className="shrink-0 mb-3">
+              <input
+                type="text"
+                value={customShoppingNote}
+                onChange={(e) => setCustomShoppingNote(e.target.value)}
+                placeholder="Agregar nota o producto extra (ej: Gasas, Curitas, Alcohol...)"
+                className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-xs text-foreground"
+              />
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#383f4e] shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  const text = buildShoppingWhatsAppText()
+                  try {
+                    await navigator.clipboard.writeText(text)
+                    setBanner({ type: 'success', text: 'Lista de compras copiada al portapapeles.' })
+                  } catch {
+                    setBanner({ type: 'error', text: 'No se pudo copiar automáticamente.' })
+                  }
+                }}
+                className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${greyBtn}`}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                <span>Copiar</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const text = buildShoppingWhatsAppText()
+                  const url = `https://wa.me/?text=${encodeURIComponent(text)}`
+                  window.open(url, '_blank', 'noopener,noreferrer')
+                }}
+                className="flex items-center space-x-1.5 rounded-xl bg-primary/15 border border-primary/40 text-primary hover:bg-primary/25 px-4 py-2 text-xs font-semibold transition-colors"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+                <span>WhatsApp</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
