@@ -984,6 +984,37 @@ export default function BotiquinAppClient({
     return lines.join('\n')
   }
 
+  function openWhatsApp(text: string) {
+    // Usamos api.whatsapp.com/send/?text= directamente para evitar el bug del acortador wa.me,
+    // el cual en su redirección HTTP 302 corrompe los emojis UTF-8 de 4 bytes convirtiéndolos en  (\uFFFD)
+    const url = `https://api.whatsapp.com/send/?text=${encodeURIComponent(text)}`
+    const win = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!win) {
+      window.location.href = url
+    }
+  }
+
+  async function copyToClipboard(text: string, successMsg: string = 'Copiado al portapapeles.') {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      showToast(successMsg, 'success')
+    } catch {
+      showToast('No se pudo copiar automáticamente.', 'error')
+    }
+  }
+
   function buildViajeWhatsAppText(): string {
     const lines: string[] = ['🧳 *Botiquín de Viaje / Vacaciones*']
     const entornosLabels = viajeConfig.entornos
@@ -3066,10 +3097,17 @@ export default function BotiquinAppClient({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() => {
-                        const text = buildViajeWhatsAppText()
-                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
-                      }}
+                      onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Lista del viaje copiada al portapapeles.')}
+                      title="Copiar lista del viaje al portapapeles"
+                      className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Copiar</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openWhatsApp(buildViajeWhatsAppText())}
                       title="Compartir lista del viaje por WhatsApp"
                       className="flex items-center space-x-1 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-2.5 py-1.5 text-xs font-semibold transition-colors"
                     >
@@ -3424,10 +3462,16 @@ export default function BotiquinAppClient({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          const text = buildViajeWhatsAppText()
-                          window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
-                        }}
+                        onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Lista del viaje copiada al portapapeles.')}
+                        className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        <span>Copiar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openWhatsApp(buildViajeWhatsAppText())}
                         className="flex items-center space-x-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-3.5 py-1.5 text-xs font-semibold transition-colors"
                       >
                         <Share2 className="h-3.5 w-3.5" />
@@ -3639,21 +3683,28 @@ export default function BotiquinAppClient({
                   />
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2">
                   <span className="text-[11px] text-muted-foreground">
                     Las notas se incluirán automáticamente al compartir el checklist por WhatsApp.
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const text = buildViajeWhatsAppText()
-                      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank')
-                    }}
-                    className="flex items-center space-x-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-3.5 py-1.5 text-xs font-semibold transition-colors"
-                  >
-                    <Share2 className="h-3.5 w-3.5" />
-                    <span>Compartir Notas por WhatsApp</span>
-                  </button>
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Checklist y notas copiadas al portapapeles.')}
+                      className={`flex items-center space-x-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      <span>Copiar</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openWhatsApp(buildViajeWhatsAppText())}
+                      className="flex items-center space-x-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-3.5 py-1.5 text-xs font-semibold transition-colors"
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      <span>Compartir Notas por WhatsApp</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -5729,14 +5780,9 @@ export default function BotiquinAppClient({
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#383f4e] shrink-0">
               <button
                 type="button"
-                onClick={async () => {
+                onClick={() => {
                   const text = buildShoppingWhatsAppText()
-                  try {
-                    await navigator.clipboard.writeText(text)
-                    showToast('Lista de compras copiada al portapapeles.', 'success')
-                  } catch {
-                    showToast('No se pudo copiar automáticamente.', 'error')
-                  }
+                  copyToClipboard(text, 'Lista de compras copiada al portapapeles.')
                 }}
                 className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${greyBtn}`}
               >
@@ -5748,8 +5794,7 @@ export default function BotiquinAppClient({
                 type="button"
                 onClick={() => {
                   const text = buildShoppingWhatsAppText()
-                  const url = `https://wa.me/?text=${encodeURIComponent(text)}`
-                  window.open(url, '_blank', 'noopener,noreferrer')
+                  openWhatsApp(text)
                 }}
                 className="flex items-center space-x-1.5 rounded-xl bg-primary/15 border border-primary/40 text-primary hover:bg-primary/25 px-4 py-2 text-xs font-semibold transition-colors"
               >
