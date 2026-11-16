@@ -246,25 +246,36 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
       let config = (cfgRes.data as BotiquinConfig) || null
       let alertas_log = (logRes.data as AlertaLog[]) || []
 
-      // Automatic one-time migration from Storage backup if the SQL tables were just created empty
-      if (
-        medicamentos.length === 0 &&
-        familia.length === 0 &&
-        movimientos.length === 0 &&
-        esenciales.length === 0
-      ) {
+      // Automatic migration from Storage backup whenever SQL stock table is empty but Storage has data
+      if (medicamentos.length === 0) {
         const backup = await loadStorageBackupState()
-        if (backup) {
+        if (
+          backup &&
+          ((backup.medicamentos && backup.medicamentos.length > 0) ||
+            (backup.familia && backup.familia.length > 0) ||
+            (backup.movimientos && backup.movimientos.length > 0))
+        ) {
           medicamentos = (backup.medicamentos || []).map(normalizeMedicamento)
-          familia = backup.familia || []
-          esenciales =
-            backup.esenciales && backup.esenciales.length > 0
-              ? backup.esenciales
-              : DEFAULT_ESENCIALES
-          movimientos = backup.movimientos || []
-          consultas_historial = backup.consultas_historial || []
-          config = { ...DEFAULT_CONFIG, ...(backup.config || {}) }
-          alertas_log = backup.alertas_log || []
+          if (familia.length === 0 && backup.familia?.length) {
+            familia = backup.familia
+          }
+          if (esenciales.length === 0 && backup.esenciales?.length) {
+            esenciales = backup.esenciales
+          } else if (esenciales.length === 0) {
+            esenciales = DEFAULT_ESENCIALES
+          }
+          if (movimientos.length === 0 && backup.movimientos?.length) {
+            movimientos = backup.movimientos
+          }
+          if (consultas_historial.length === 0 && backup.consultas_historial?.length) {
+            consultas_historial = backup.consultas_historial
+          }
+          if (!config && backup.config) {
+            config = { ...DEFAULT_CONFIG, ...backup.config }
+          }
+          if (alertas_log.length === 0 && backup.alertas_log?.length) {
+            alertas_log = backup.alertas_log
+          }
 
           const migratedState: BotiquinState = {
             medicamentos,
@@ -272,7 +283,7 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
             esenciales,
             movimientos,
             consultas_historial,
-            config,
+            config: config || DEFAULT_CONFIG,
             alertas_log,
           }
           await syncSqlTables(migratedState)
