@@ -159,6 +159,8 @@ const LOCAL_STATE_FILE = path.join(LOCAL_DATA_DIR, 'botiquin_state.json')
 const BUCKET_NAME = 'botiquin'
 const STORAGE_STATE_PATH = 'db/botiquin_state.json'
 
+let bucketVerifiedInMemory = false
+
 function getInitialState(): BotiquinState {
   return {
     medicamentos: [],
@@ -172,18 +174,32 @@ function getInitialState(): BotiquinState {
 }
 
 async function ensureBucketExists() {
+  if (bucketVerifiedInMemory) return
   try {
     const supabase = createAdminClient()
     const { data: buckets } = await supabase.storage.listBuckets()
     if (!buckets?.some((b) => b.name === BUCKET_NAME)) {
       await supabase.storage.createBucket(BUCKET_NAME, { public: true })
     }
+    bucketVerifiedInMemory = true
   } catch (e) {
     console.warn('Could not verify/create Supabase bucket:', e)
   }
 }
 
 async function loadStorageBackupState(): Promise<Partial<BotiquinState> | null> {
+  if (fs.existsSync(LOCAL_STATE_FILE)) {
+    try {
+      const raw = fs.readFileSync(LOCAL_STATE_FILE, 'utf8')
+      const parsed = JSON.parse(raw) as Partial<BotiquinState>
+      if (parsed && (parsed.medicamentos?.length || parsed.familia?.length)) {
+        return parsed
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const supabase = createAdminClient()
   try {
     const { data, error } = await supabase.storage.from(BUCKET_NAME).download(STORAGE_STATE_PATH)
@@ -195,15 +211,6 @@ async function loadStorageBackupState(): Promise<Partial<BotiquinState> | null> 
     // ignore
   }
 
-  if (fs.existsSync(LOCAL_STATE_FILE)) {
-    try {
-      const raw = fs.readFileSync(LOCAL_STATE_FILE, 'utf8')
-      return JSON.parse(raw) as Partial<BotiquinState>
-    } catch {
-      // ignore
-    }
-  }
-
   return null
 }
 
@@ -211,34 +218,30 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
   const supabase = createAdminClient()
 
   try {
-    const { data: meds, error: medsError } = await supabase
-      .from(TABLE_STOCK)
-      .select('*')
-      .order('created_at', { ascending: false })
+    const [medsRes, famRes, escRes, movRes, histRes, cfgRes, logRes] = await Promise.all([
+      supabase.from(TABLE_STOCK).select('*').order('created_at', { ascending: false }),
+      supabase.from(TABLE_FAMILIARES).select('*').order('created_at', { ascending: true }),
+      supabase.from(TABLE_ESENCIALES).select('*').order('nombre', { ascending: true }),
+      supabase
+        .from(TABLE_MOVIMIENTOS)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(300),
+      supabase
+        .from(TABLE_HISTORIAL)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(300),
+      supabase.from(TABLE_CONFIG).select('*').eq('id', 'default').maybeSingle(),
+      supabase
+        .from(TABLE_ALERTAS)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100),
+    ])
 
-    if (!medsError && meds !== null) {
-      const [famRes, escRes, movRes, histRes, cfgRes, logRes] = await Promise.all([
-        supabase.from(TABLE_FAMILIARES).select('*').order('created_at', { ascending: true }),
-        supabase.from(TABLE_ESENCIALES).select('*').order('nombre', { ascending: true }),
-        supabase
-          .from(TABLE_MOVIMIENTOS)
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(300),
-        supabase
-          .from(TABLE_HISTORIAL)
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(300),
-        supabase.from(TABLE_CONFIG).select('*').eq('id', 'default').maybeSingle(),
-        supabase
-          .from(TABLE_ALERTAS)
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(100),
-      ])
-
-      let medicamentos = (meds as Medicamento[]).map(normalizeMedicamento)
+    if (!medsRes.error && medsRes.data !== null) {
+      let medicamentos = (medsRes.data as Medicamento[]).map(normalizeMedicamento)
       let familia = (famRes.data as MiembroFamilia[]) || []
       let esenciales = (escRes.data as ProductoEsencial[]) || []
       let movimientos = (movRes.data as MovimientoStock[]) || []
@@ -292,14 +295,21 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
         }
       }
 
+      const initPromises: PromiseLike<unknown>[] = []
       if (esenciales.length === 0) {
         esenciales = DEFAULT_ESENCIALES
-        await supabase.from(TABLE_ESENCIALES).upsert(DEFAULT_ESENCIALES, { onConflict: 'id' })
+        initPromises.push(
+          supabase.from(TABLE_ESENCIALES).upsert(DEFAULT_ESENCIALES, { onConflict: 'id' })
+        )
       }
-
       if (!config) {
         config = DEFAULT_CONFIG
-        await supabase.from(TABLE_CONFIG).upsert(DEFAULT_CONFIG, { onConflict: 'id' })
+        initPromises.push(
+          supabase.from(TABLE_CONFIG).upsert(DEFAULT_CONFIG, { onConflict: 'id' })
+        )
+      }
+      if (initPromises.length > 0) {
+        await Promise.all(initPromises)
       }
 
       const state: BotiquinState = {
@@ -320,7 +330,6 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
   }
 
   try {
-    await ensureBucketExists()
     const parsed = await loadStorageBackupState()
     if (parsed) {
       const state: BotiquinState = {
@@ -376,61 +385,75 @@ function saveLocalMirror(state: BotiquinState) {
   }
 }
 
-async function syncSqlTables(state: BotiquinState): Promise<void> {
+async function syncSqlTables(state: BotiquinState): Promise<boolean> {
   const supabase = createAdminClient()
   try {
-    const { error: checkErr } = await supabase
-      .from(TABLE_CONFIG)
-      .upsert(state.config, { onConflict: 'id' })
-
-    if (!checkErr) {
-      if (state.medicamentos.length > 0) {
-        await supabase.from(TABLE_STOCK).upsert(state.medicamentos, { onConflict: 'id' })
-      }
-      if ((state.familia || []).length > 0) {
-        await supabase.from(TABLE_FAMILIARES).upsert(state.familia, { onConflict: 'id' })
-      }
-      if (state.esenciales.length > 0) {
-        await supabase.from(TABLE_ESENCIALES).upsert(state.esenciales, { onConflict: 'id' })
-      }
-      if (state.movimientos.length > 0) {
-        await supabase
+    const tasks: PromiseLike<{ error: unknown }>[] = [
+      supabase.from(TABLE_CONFIG).upsert(state.config, { onConflict: 'id' }),
+    ]
+    if (state.medicamentos.length > 0) {
+      tasks.push(supabase.from(TABLE_STOCK).upsert(state.medicamentos, { onConflict: 'id' }))
+    }
+    if ((state.familia || []).length > 0) {
+      tasks.push(supabase.from(TABLE_FAMILIARES).upsert(state.familia, { onConflict: 'id' }))
+    }
+    if (state.esenciales.length > 0) {
+      tasks.push(supabase.from(TABLE_ESENCIALES).upsert(state.esenciales, { onConflict: 'id' }))
+    }
+    if (state.movimientos.length > 0) {
+      tasks.push(
+        supabase
           .from(TABLE_MOVIMIENTOS)
           .upsert(state.movimientos.slice(0, 100), { onConflict: 'id' })
-      }
-      if ((state.consultas_historial || []).length > 0) {
-        await supabase
+      )
+    }
+    if ((state.consultas_historial || []).length > 0) {
+      tasks.push(
+        supabase
           .from(TABLE_HISTORIAL)
           .upsert(state.consultas_historial.slice(0, 100), { onConflict: 'id' })
-      }
-      if (state.alertas_log.length > 0) {
-        await supabase
+      )
+    }
+    if (state.alertas_log.length > 0) {
+      tasks.push(
+        supabase
           .from(TABLE_ALERTAS)
           .upsert(state.alertas_log.slice(0, 100), { onConflict: 'id' })
-      }
+      )
     }
+
+    const results = await Promise.all(tasks)
+    return !results[0]?.error
   } catch {
-    // SQL tables not created yet
+    return false
   }
 }
 
 export async function saveBotiquinState(state: BotiquinState): Promise<void> {
   saveLocalMirror(state)
 
-  const supabase = createAdminClient()
+  const sqlOk = await syncSqlTables(state)
 
-  try {
-    await ensureBucketExists()
-    const payload = Buffer.from(JSON.stringify(state, null, 2), 'utf8')
-    await supabase.storage.from(BUCKET_NAME).upload(STORAGE_STATE_PATH, payload, {
-      contentType: 'application/json',
-      upsert: true,
-    })
-  } catch (e) {
-    console.error('Error saving state to Supabase Storage:', e)
+  // Upload backup JSON in background if SQL succeeded, or await if SQL is not available
+  const uploadBackup = async () => {
+    try {
+      const supabase = createAdminClient()
+      await ensureBucketExists()
+      const payload = Buffer.from(JSON.stringify(state, null, 2), 'utf8')
+      await supabase.storage.from(BUCKET_NAME).upload(STORAGE_STATE_PATH, payload, {
+        contentType: 'application/json',
+        upsert: true,
+      })
+    } catch (e) {
+      console.error('Error saving state backup to Supabase Storage:', e)
+    }
   }
 
-  await syncSqlTables(state)
+  if (sqlOk) {
+    void uploadBackup()
+  } else {
+    await uploadBackup()
+  }
 }
 
 export async function uploadMedicationPhoto(

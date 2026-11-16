@@ -147,12 +147,11 @@ export async function POST(req: NextRequest) {
         ],
       })
 
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
         medicamento: nuevo,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
         emailSent: alertResult.sent,
       })
     }
@@ -250,12 +249,11 @@ export async function POST(req: NextRequest) {
         triggerReason: `Actualización de ${actualizado.nombre}`,
       })
 
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
         medicamento: actualizado,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
         emailSent: alertResult.sent,
       })
     }
@@ -307,12 +305,11 @@ export async function POST(req: NextRequest) {
         triggerReason: `Consumo de dosis de ${med.nombre} (quedan ${nuevaCantidad} ${med.unidad})`,
       })
 
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        medicamento: updatedState.medicamentos[idx],
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        medicamento: state.medicamentos[idx],
+        state,
+        alertasActivas: calcularAlertasActivas(state),
         emailSent: alertResult.sent,
       })
     }
@@ -355,11 +352,10 @@ export async function POST(req: NextRequest) {
       ].slice(0, 300)
 
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -433,11 +429,10 @@ export async function POST(req: NextRequest) {
         // ignore if SQL table does not exist
       }
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -505,22 +500,20 @@ export async function POST(req: NextRequest) {
         // ignore
       }
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
     if (action === 'reset_esenciales') {
       state.esenciales = DEFAULT_ESENCIALES
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -537,11 +530,10 @@ export async function POST(req: NextRequest) {
         updated_at: nowIso,
       }
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -596,13 +588,12 @@ export async function POST(req: NextRequest) {
       state.esenciales = listaActualizada
 
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
         miembro,
         nuevosEsencialesCount: nuevos.length,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -617,11 +608,10 @@ export async function POST(req: NextRequest) {
         // ignore
       }
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
@@ -652,11 +642,10 @@ export async function POST(req: NextRequest) {
         // ignore
       }
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 
