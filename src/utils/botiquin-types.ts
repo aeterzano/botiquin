@@ -596,8 +596,8 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
 ]
 
 export function evaluarViaje(
-  destino: string,
-  entornos: EntornoViaje[]
+  entornos: EntornoViaje[],
+  destino: string = ''
 ): {
   alertas: AlertaEvaluacionViaje[]
   extrasSugeridos: ItemViajeExtra[]
