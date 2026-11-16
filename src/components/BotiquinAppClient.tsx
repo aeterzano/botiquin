@@ -47,6 +47,7 @@ import {
   calcularDiasVencimiento,
   calcularEdadDesdeFecha,
   calcularStockMinimoPorDefecto,
+  detectarGeneroPorNombre,
   esProductoConsideradoEsencial,
   CATEGORIAS_MEDICAMENTOS,
   esMedicamentoProximoAVencer,
@@ -54,6 +55,7 @@ import {
   Medicamento,
   MiembroFamilia,
   MotivoBaja,
+  obtenerEmojiFamiliar,
   ProductoEsencial,
   PublicoObjetivo,
   UnidadMedida,
@@ -360,6 +362,7 @@ export default function BotiquinAppClient({
   const [familiarForm, setFamiliarForm] = useState({
     id: '',
     nombre: '',
+    genero: 'masculino' as 'masculino' | 'femenino',
     fecha_nacimiento: '',
     peso_kg: '',
     antecedentes_medicos: '',
@@ -1145,7 +1148,8 @@ export default function BotiquinAppClient({
 
     if (familiarObj) {
       const edadInfo = calcularEdadDesdeFecha(familiarObj.fecha_nacimiento)
-      labelPaciente = `${edadInfo.esPediatrico ? '👶' : '🧑'} ${familiarObj.nombre}`
+      const emojiFam = obtenerEmojiFamiliar(familiarObj)
+      labelPaciente = `${emojiFam} ${familiarObj.nombre}`
       const parts: string[] = [edadInfo.texto]
       if (familiarObj.peso_kg) parts.push(`${familiarObj.peso_kg} kg`)
       detalleEdadPeso = parts.join(' • ')
@@ -1220,6 +1224,7 @@ export default function BotiquinAppClient({
     setFamiliarForm({
       id: '',
       nombre: '',
+      genero: 'masculino',
       fecha_nacimiento: '',
       peso_kg: '',
       antecedentes_medicos: '',
@@ -1230,9 +1235,15 @@ export default function BotiquinAppClient({
 
   function openEditFamiliarModal(miembro: MiembroFamilia) {
     setEditingFamiliar(miembro)
+    const detectedGen =
+      miembro.genero ||
+      (miembro.alergias === 'femenino' || miembro.alergias === 'masculino'
+        ? miembro.alergias
+        : detectarGeneroPorNombre(miembro.nombre))
     setFamiliarForm({
       id: miembro.id,
       nombre: miembro.nombre,
+      genero: detectedGen,
       fecha_nacimiento: miembro.fecha_nacimiento || '',
       peso_kg:
         miembro.peso_kg !== null && miembro.peso_kg !== undefined
@@ -2132,7 +2143,6 @@ export default function BotiquinAppClient({
                   </label>
                   <div className="flex flex-wrap gap-1.5 max-h-[82px] overflow-y-auto pr-0.5">
                     {(state.familia || []).map((miembro) => {
-                      const edadInfo = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
                       const selected = selectedFamiliarId === miembro.id
                       return (
                         <button
@@ -2143,7 +2153,7 @@ export default function BotiquinAppClient({
                             selected ? greyBtnActive : greyBtn
                           }`}
                         >
-                          <span>{edadInfo.esPediatrico ? '👶' : '🧑'}</span>
+                          <span>{obtenerEmojiFamiliar(miembro)}</span>
                           <span className="truncate max-w-[100px]">{miembro.nombre}</span>
                         </button>
                       )
@@ -2639,7 +2649,7 @@ export default function BotiquinAppClient({
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex items-center space-x-2.5">
                                 <span className="text-2xl leading-none select-none">
-                                  {edadInfo.esPediatrico ? '👶' : '🧑'}
+                                  {obtenerEmojiFamiliar(miembro)}
                                 </span>
                                 <div>
                                   <h3 className="text-base font-bold text-foreground leading-tight">
@@ -3357,18 +3367,53 @@ export default function BotiquinAppClient({
             </div>
 
             <form onSubmit={handleSaveFamiliar} className="mt-4 space-y-3">
-              <div>
-                <label className="text-xs font-medium text-zinc-200 block mb-1">
-                  Nombre *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={familiarForm.nombre}
-                  onChange={(e) => setFamiliarForm({ ...familiarForm, nombre: e.target.value })}
-                  placeholder="Ej: Bauti, Marisol, Agustín"
-                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
+                    Nombre *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={familiarForm.nombre}
+                    onChange={(e) => {
+                      const nextNombre = e.target.value
+                      setFamiliarForm({
+                        ...familiarForm,
+                        nombre: nextNombre,
+                        genero: detectarGeneroPorNombre(nextNombre),
+                      })
+                    }}
+                    placeholder="Ej: Bauti, Marisol, Alejandro"
+                    className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
+                    Ícono / Sexo
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setFamiliarForm({ ...familiarForm, genero: 'masculino' })}
+                      className={`py-1.5 px-2 rounded-lg text-xs font-medium ${
+                        familiarForm.genero === 'masculino' ? greyBtnActive : greyBtn
+                      }`}
+                    >
+                      👨 Hombre
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFamiliarForm({ ...familiarForm, genero: 'femenino' })}
+                      className={`py-1.5 px-2 rounded-lg text-xs font-medium ${
+                        familiarForm.genero === 'femenino' ? greyBtnActive : greyBtn
+                      }`}
+                    >
+                      👩 Mujer
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -3933,7 +3978,6 @@ export default function BotiquinAppClient({
                   </label>
                   <div className="flex flex-wrap gap-1.5">
                     {(state.familia || []).map((f) => {
-                      const ed = calcularEdadDesdeFecha(f.fecha_nacimiento)
                       return (
                         <button
                           key={f.id}
@@ -3943,7 +3987,7 @@ export default function BotiquinAppClient({
                             dosisFamiliarId === f.id ? greyBtnActive : greyBtn
                           }`}
                         >
-                          <span>{ed.esPediatrico ? '👶' : '🧑'}</span>
+                          <span>{obtenerEmojiFamiliar(f)}</span>
                           <span>{f.nombre}</span>
                         </button>
                       )

@@ -75,6 +75,7 @@ export interface MiembroFamilia {
   dolores_recurrentes: string
   alergias?: string
   medicacion_habitual?: string
+  genero?: 'masculino' | 'femenino'
   created_at: string
   updated_at: string
 }
@@ -226,6 +227,104 @@ export function calcularEdadDesdeFecha(fechaNacimiento: string | null | undefine
   }
 
   return { anios: years, meses: months, totalMeses, texto, esPediatrico }
+}
+
+export function detectarGeneroPorNombre(nombre: string | null | undefined): 'masculino' | 'femenino' {
+  const n = normalizeText(nombre).split(/\s+/)[0] || ''
+  if (!n) return 'masculino'
+
+  const nombresFemeninosExactos = new Set([
+    'marisol',
+    'maria',
+    'lucia',
+    'ana',
+    'sofia',
+    'valeria',
+    'carla',
+    'paula',
+    'laura',
+    'florencia',
+    'camila',
+    'martina',
+    'valentina',
+    'julieta',
+    'romina',
+    'natalia',
+    'silvina',
+    'andrea',
+    'cecilia',
+    'gabriela',
+    'veronica',
+    'agustina',
+    'micaela',
+    'rocio',
+    'belen',
+    'victoria',
+    'elena',
+    'claudia',
+    'patricia',
+    'monica',
+    'susana',
+    'alicia',
+    'marta',
+    'rosa',
+    'juana',
+    'carmen',
+    'beatriz',
+    'liliana',
+    'graciela',
+    'norma',
+    'mirta',
+    'silvia',
+    'adriana',
+    'daniela',
+    'carolina',
+    'sol',
+    'pilar',
+    'inés',
+    'ines',
+    'mercedes',
+    'dolores',
+    'lourdes',
+    'abril',
+    'jazmin',
+    'noemi',
+    'ester',
+    'esther',
+    'raquel',
+    'ruth',
+    'isabel',
+    'mabel',
+    'gladys',
+    'celeste',
+    'guadalupe',
+    'milagros',
+  ])
+
+  const nombresMasculinosEnA = new Set(['luca', 'borja', 'nikita', 'bautista'])
+
+  if (nombresFemeninosExactos.has(n)) return 'femenino'
+  if (n.endsWith('a') && !nombresMasculinosEnA.has(n)) return 'femenino'
+  return 'masculino'
+}
+
+export function obtenerEmojiFamiliar(miembro: {
+  nombre?: string
+  fecha_nacimiento?: string | null
+  genero?: 'masculino' | 'femenino'
+  alergias?: string
+}): string {
+  const edad = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
+  if (edad.esPediatrico) {
+    return '👶'
+  }
+  const storedGen =
+    miembro.genero ||
+    (miembro.alergias === 'femenino' || miembro.alergias === 'masculino'
+      ? miembro.alergias
+      : undefined)
+  const gen = storedGen || detectarGeneroPorNombre(miembro.nombre)
+  return gen === 'femenino' ? '👩' : '👨'
 }
 
 /**

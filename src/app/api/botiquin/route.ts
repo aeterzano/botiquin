@@ -566,7 +566,7 @@ export async function POST(req: NextRequest) {
             : null,
         antecedentes_medicos: String(payload.antecedentes_medicos || '').trim(),
         dolores_recurrentes: String(payload.dolores_recurrentes || '').trim(),
-        alergias: String(payload.alergias || '').trim(),
+        alergias: String(payload.genero || payload.alergias || '').trim(),
         medicacion_habitual: String(payload.medicacion_habitual || '').trim(),
         created_at:
           existingIdx >= 0 ? state.familia[existingIdx].created_at : nowIso,
