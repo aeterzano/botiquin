@@ -4,9 +4,11 @@ import {
   calcularAlertasActivas,
   calcularStockMinimoPorDefecto,
   esProductoConsideradoEsencial,
+  generarEsencialesSegunFamilia,
   DEFAULT_ESENCIALES,
   loadBotiquinState,
   Medicamento,
+  MiembroFamilia,
   MotivoBaja,
   ProductoEsencial,
   PublicoObjetivo,
@@ -131,7 +133,6 @@ export async function POST(req: NextRequest) {
 
       await saveBotiquinState(state)
 
-      // Check if newly added product triggers an expiration or zero-stock alert
       const alertResult = await evaluateAndSendAlerts({
         force: false,
         triggerReason: `Carga de producto: ${nuevo.nombre}`,
@@ -256,7 +257,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'consume_dosis') {
-      const { id, cantidad, motivo } = body
+      const { id, cantidad, motivo, familiar_id, familiar_nombre } = body
       const idx = state.medicamentos.findIndex((m) => m.id === id)
       if (idx === -1) {
         return NextResponse.json({ ok: false, error: 'Medicamento no encontrado' }, { status: 404 })
@@ -272,6 +273,12 @@ export async function POST(req: NextRequest) {
         updated_at: nowIso,
       }
 
+      const baseMotivo = motivo || `Uso de dosis (-${cantRestar} ${med.unidad})`
+      const finalMotivo =
+        familiar_nombre && !baseMotivo.toLowerCase().includes(String(familiar_nombre).toLowerCase())
+          ? `${baseMotivo} • Paciente: ${familiar_nombre}`
+          : baseMotivo
+
       state.movimientos = [
         {
           id: crypto.randomUUID(),
@@ -280,8 +287,10 @@ export async function POST(req: NextRequest) {
           tipo: 'consumo',
           cantidad: cantRestar,
           unidad: med.unidad,
-          motivo: motivo || `Uso de dosis (-${cantRestar} ${med.unidad})`,
+          motivo: finalMotivo,
           usuario_email: userEmail,
+          familiar_id: familiar_id || null,
+          familiar_nombre: familiar_nombre || null,
           created_at: nowIso,
         },
         ...state.movimientos,
@@ -289,7 +298,6 @@ export async function POST(req: NextRequest) {
 
       await saveBotiquinState(state)
 
-      // Evaluate alerts immediately (e.g. if product reached 0 stock or essential became missing)
       const alertResult = await evaluateAndSendAlerts({
         force: false,
         triggerReason: `Consumo de dosis de ${med.nombre} (quedan ${nuevaCantidad} ${med.unidad})`,
@@ -396,7 +404,6 @@ export async function POST(req: NextRequest) {
 
       await saveBotiquinState(state)
 
-      // Giving low to a product might leave an essential uncovered -> evaluate and send alerts
       const alertResult = await evaluateAndSendAlerts({
         force: false,
         triggerReason: `Baja de producto: ${med.nombre} (${etiquetasMotivo[motivoValido || 'tirado']})`,
@@ -543,6 +550,93 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         result,
+        state: updatedState,
+        alertasActivas: calcularAlertasActivas(updatedState),
+      })
+    }
+
+    if (action === 'save_familiar') {
+      const payload = body.familiar || {}
+      const id = payload.id || `fam-${Date.now()}`
+      const existingIdx = (state.familia || []).findIndex((f) => f.id === id)
+
+      const miembro: MiembroFamilia = {
+        id,
+        nombre: String(payload.nombre || 'Integrante').trim(),
+        fecha_nacimiento: String(payload.fecha_nacimiento || '').trim(),
+        peso_kg:
+          payload.peso_kg !== null && payload.peso_kg !== undefined && String(payload.peso_kg) !== ''
+            ? Number(payload.peso_kg)
+            : null,
+        antecedentes_medicos: String(payload.antecedentes_medicos || '').trim(),
+        dolores_recurrentes: String(payload.dolores_recurrentes || '').trim(),
+        alergias: String(payload.alergias || '').trim(),
+        medicacion_habitual: String(payload.medicacion_habitual || '').trim(),
+        created_at:
+          existingIdx >= 0 ? state.familia[existingIdx].created_at : nowIso,
+        updated_at: nowIso,
+      }
+
+      if (!state.familia) state.familia = []
+      if (existingIdx >= 0) {
+        state.familia[existingIdx] = miembro
+      } else {
+        state.familia.push(miembro)
+      }
+
+      // Automatically adapt the Esenciales catalog to cover the family member's needs
+      const { nuevos, listaActualizada } = generarEsencialesSegunFamilia(
+        state.familia,
+        state.esenciales
+      )
+      state.esenciales = listaActualizada
+
+      await saveBotiquinState(state)
+      const updatedState = await loadBotiquinState()
+      return NextResponse.json({
+        ok: true,
+        miembro,
+        nuevosEsencialesCount: nuevos.length,
+        state: updatedState,
+        alertasActivas: calcularAlertasActivas(updatedState),
+      })
+    }
+
+    if (action === 'delete_familiar') {
+      const { id } = body
+      state.familia = (state.familia || []).filter((f) => f.id !== id)
+      await saveBotiquinState(state)
+      const updatedState = await loadBotiquinState()
+      return NextResponse.json({
+        ok: true,
+        state: updatedState,
+        alertasActivas: calcularAlertasActivas(updatedState),
+      })
+    }
+
+    if (action === 'sync_esenciales_familia') {
+      const { nuevos, listaActualizada } = generarEsencialesSegunFamilia(
+        state.familia || [],
+        state.esenciales
+      )
+      state.esenciales = listaActualizada
+      await saveBotiquinState(state)
+      const updatedState = await loadBotiquinState()
+      return NextResponse.json({
+        ok: true,
+        nuevosEsencialesCount: nuevos.length,
+        state: updatedState,
+        alertasActivas: calcularAlertasActivas(updatedState),
+      })
+    }
+
+    if (action === 'delete_consulta_historial') {
+      const { id } = body
+      state.consultas_historial = (state.consultas_historial || []).filter((c) => c.id !== id)
+      await saveBotiquinState(state)
+      const updatedState = await loadBotiquinState()
+      return NextResponse.json({
+        ok: true,
         state: updatedState,
         alertasActivas: calcularAlertasActivas(updatedState),
       })

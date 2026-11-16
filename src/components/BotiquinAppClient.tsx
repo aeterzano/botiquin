@@ -36,18 +36,21 @@ import {
   Images,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from 'lucide-react'
 import {
   AlertaActiva,
   BotiquinConfig,
   BotiquinState,
   calcularDiasVencimiento,
+  calcularEdadDesdeFecha,
   calcularStockMinimoPorDefecto,
   esProductoConsideradoEsencial,
   CATEGORIAS_MEDICAMENTOS,
   esMedicamentoProximoAVencer,
   esMedicamentoVencido,
   Medicamento,
+  MiembroFamilia,
   MotivoBaja,
   ProductoEsencial,
   PublicoObjetivo,
@@ -56,9 +59,15 @@ import {
 } from '@/utils/botiquin-types'
 import { CampoFaltanteIA, ConsultaAIResponse } from '@/utils/ai-botiquin'
 
-type TabType = 'stock' | 'consulta' | 'esenciales' | 'alertas'
+type TabType = 'stock' | 'consulta' | 'historial' | 'configuracion'
+type ConfigSubTab = 'familia' | 'esenciales' | 'alertas'
 type ModoCargaMed = 'hibrido_ia' | 'manual'
 type MedModalTab = 'general' | 'stock' | 'uso'
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
 
 interface ChatItem {
   id: string
@@ -129,7 +138,6 @@ function formatPrincipalActivoEsencial(esc: ProductoEsencial): string {
 function formatSintomasEsencial(esc: ProductoEsencial): string {
   if (!esc.descripcion) return '-'
   return esc.descripcion
-    .replace(/\s*\([^)]*\)/g, '')
     .replace(/\s+en\s+(beb[eé]s|ni[ñn]os|adultos).*$/i, '')
     .replace(/\.$/, '')
     .trim()
@@ -238,13 +246,29 @@ export default function BotiquinAppClient({
   initialState: BotiquinState
   initialAlertas: AlertaActiva[]
 }) {
-  const [state, setState] = useState<BotiquinState>(initialState)
+  const [state, setState] = useState<BotiquinState>({
+    ...initialState,
+    familia: initialState.familia || [],
+    consultas_historial: initialState.consultas_historial || [],
+  })
   const [, setAlertas] = useState<AlertaActiva[]>(initialAlertas)
   const [activeTab, setActiveTab] = useState<TabType>('stock')
+  const [configSubTab, setConfigSubTab] = useState<ConfigSubTab>('familia')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(
     null
   )
+
+  // PWA Install Prompt state
+  const [deferredInstallPrompt, setDeferredInstallPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null)
+  const [isStandalonePWA, setIsStandalonePWA] = useState(false)
+
+  // Mobile / Click Tooltip state for Stock cards ('Función' & 'Dosis')
+  const [activeCardTooltip, setActiveCardTooltip] = useState<{
+    medId: string
+    field: 'funcion' | 'dosis'
+  } | null>(null)
 
   // Stock filters
   const [searchQuery, setSearchQuery] = useState('')
@@ -293,6 +317,7 @@ export default function BotiquinAppClient({
   const [dosisModalMed, setDosisModalMed] = useState<Medicamento | null>(null)
   const [dosisCantidad, setDosisCantidad] = useState<number>(1)
   const [dosisMotivo, setDosisMotivo] = useState<string>('')
+  const [dosisFamiliarId, setDosisFamiliarId] = useState<string>('')
   const [submittingDosis, setSubmittingDosis] = useState(false)
 
   // Reponer Stock Modal
@@ -311,13 +336,33 @@ export default function BotiquinAppClient({
   const [lightboxPhotos, setLightboxPhotos] = useState<string[]>([])
   const [lightboxIndex, setLightboxIndex] = useState<number>(0)
 
-  // Consultorio IA state (Edad & Peso separated and numeric)
+  // Consultorio IA state (Family member selector + 'otro' option)
   const [chatInput, setChatInput] = useState('')
-  const [pacienteTipo, setPacienteTipo] = useState<'auto' | 'adulto' | 'pediatrico'>('auto')
+  const [selectedFamiliarId, setSelectedFamiliarId] = useState<string>(() =>
+    initialState.familia && initialState.familia.length > 0 ? initialState.familia[0].id : 'otro'
+  )
+  const [pacienteTipoOtro, setPacienteTipoOtro] = useState<'adulto' | 'pediatrico'>('adulto')
   const [pacienteEdad, setPacienteEdad] = useState('')
   const [pacientePeso, setPacientePeso] = useState('')
   const [consultingAI, setConsultingAI] = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatItem[]>([])
+
+  // Historial filter state
+  const [historialFilterFamiliarId, setHistorialFilterFamiliarId] = useState<string>('todos')
+  const [historialVista, setHistorialVista] = useState<'consultas' | 'consumos'>('consultas')
+
+  // Family Member Modal state
+  const [familiarModalOpen, setFamiliarModalOpen] = useState(false)
+  const [editingFamiliar, setEditingFamiliar] = useState<MiembroFamilia | null>(null)
+  const [savingFamiliar, setSavingFamiliar] = useState(false)
+  const [familiarForm, setFamiliarForm] = useState({
+    id: '',
+    nombre: '',
+    fecha_nacimiento: '',
+    peso_kg: '',
+    antecedentes_medicos: '',
+    dolores_recurrentes: '',
+  })
 
   // Esenciales Modal state
   const [esencialModalOpen, setEsencialModalOpen] = useState(false)
@@ -339,6 +384,49 @@ export default function BotiquinAppClient({
   const [configForm, setConfigForm] = useState<BotiquinConfig>(initialState.config)
   const [savingConfig, setSavingConfig] = useState(false)
 
+  // Register Service Worker & listen for PWA beforeinstallprompt
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {})
+    }
+
+    const checkStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true
+    setIsStandalonePWA(checkStandalone)
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault()
+      setDeferredInstallPrompt(e as BeforeInstallPromptEvent)
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+  }, [])
+
+  // Close mobile card tooltip when clicking outside
+  useEffect(() => {
+    if (!activeCardTooltip) return
+    const handleOutsideClick = () => setActiveCardTooltip(null)
+    window.addEventListener('click', handleOutsideClick)
+    return () => window.removeEventListener('click', handleOutsideClick)
+  }, [activeCardTooltip])
+
+  // Keep selectedFamiliarId valid when family list changes
+  useEffect(() => {
+    const fam = state.familia || []
+    if (fam.length > 0 && selectedFamiliarId === 'otro' && chatMessages.length === 0) {
+      // keep 'otro' if explicitly chosen, or select first if none was valid
+    } else if (
+      selectedFamiliarId !== 'otro' &&
+      !fam.some((f) => f.id === selectedFamiliarId)
+    ) {
+      setSelectedFamiliarId(fam.length > 0 ? fam[0].id : 'otro')
+    }
+  }, [state.familia, selectedFamiliarId, chatMessages.length])
+
   // Sorted Esenciales: 1st pediatrico (bebé), 2nd ambos (familia), 3rd adulto (adultos)
   const sortedEsenciales = useMemo(() => {
     const orderMap: Record<PublicoObjetivo, number> = {
@@ -353,18 +441,25 @@ export default function BotiquinAppClient({
     })
   }, [state.esenciales])
 
-  // Sync activeTab with URL query param (?tab=stock|consulta|esenciales|alertas)
+  // Sync activeTab with URL query param (?tab=stock|consulta|historial|configuracion|esenciales|alertas)
   useEffect(() => {
     function syncTabFromUrl() {
       const params = new URLSearchParams(window.location.search)
       const tabParam = params.get('tab')
-      if (
-        tabParam === 'stock' ||
-        tabParam === 'consulta' ||
-        tabParam === 'esenciales' ||
-        tabParam === 'alertas'
-      ) {
+      const subParam = params.get('sub')
+      if (tabParam === 'stock' || tabParam === 'consulta' || tabParam === 'historial') {
         setActiveTab(tabParam)
+      } else if (tabParam === 'configuracion') {
+        setActiveTab('configuracion')
+        if (subParam === 'familia' || subParam === 'esenciales' || subParam === 'alertas') {
+          setConfigSubTab(subParam)
+        }
+      } else if (tabParam === 'esenciales') {
+        setActiveTab('configuracion')
+        setConfigSubTab('esenciales')
+      } else if (tabParam === 'alertas') {
+        setActiveTab('configuracion')
+        setConfigSubTab('alertas')
       }
     }
     syncTabFromUrl()
@@ -372,13 +467,24 @@ export default function BotiquinAppClient({
     return () => window.removeEventListener('popstate', syncTabFromUrl)
   }, [])
 
-  function handleTabNavClick(e: React.MouseEvent<HTMLAnchorElement>, tab: TabType) {
+  function handleTabNavClick(
+    e: React.MouseEvent<HTMLAnchorElement>,
+    tab: TabType,
+    sub?: ConfigSubTab
+  ) {
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) {
       return
     }
     e.preventDefault()
     setActiveTab(tab)
-    const url = tab === 'stock' ? '/' : `/?tab=${tab}`
+    if (sub) setConfigSubTab(sub)
+    setMobileMenuOpen(false)
+    const url =
+      tab === 'stock'
+        ? '/'
+        : tab === 'configuracion' && sub
+        ? `/?tab=configuracion&sub=${sub}`
+        : `/?tab=${tab}`
     window.history.pushState(null, '', url)
   }
 
@@ -386,6 +492,10 @@ export default function BotiquinAppClient({
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        if (activeCardTooltip) {
+          setActiveCardTooltip(null)
+          return
+        }
         if (lightboxPhotos.length > 0) {
           setLightboxPhotos([])
           return
@@ -402,6 +512,10 @@ export default function BotiquinAppClient({
           setBajaModalMed(null)
           return
         }
+        if (familiarModalOpen) {
+          setFamiliarModalOpen(false)
+          return
+        }
         if (esencialModalOpen) {
           setEsencialModalOpen(false)
           return
@@ -415,10 +529,12 @@ export default function BotiquinAppClient({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
+    activeCardTooltip,
     lightboxPhotos.length,
     dosisModalMed,
     reponerModalMed,
     bajaModalMed,
+    familiarModalOpen,
     esencialModalOpen,
     medModalOpen,
   ])
@@ -428,6 +544,23 @@ export default function BotiquinAppClient({
     setTimeout(() => {
       setToast((prev) => (prev?.text === text ? null : prev))
     }, 4500)
+  }
+
+  async function handleInstallPWA() {
+    if (deferredInstallPrompt) {
+      await deferredInstallPrompt.prompt()
+      const choice = await deferredInstallPrompt.userChoice
+      if (choice.outcome === 'accepted') {
+        setDeferredInstallPrompt(null)
+        showToast('¡Instalando Botiquín Virtual en tu dispositivo!', 'success')
+      }
+      setMobileMenuOpen(false)
+    } else {
+      showToast(
+        'En Chrome tocá el menú (⋮) > "Instalar aplicación" o en iOS "Compartir" > "Agregar a inicio".',
+        'info'
+      )
+    }
   }
 
   function isFieldMissingFromAI(fieldName: string): boolean {
@@ -611,6 +744,7 @@ export default function BotiquinAppClient({
     setMedModalOpen(true)
   }
 
+  // Add photos WITHOUT auto-triggering AI analysis so user can take multiple photos first
   async function handleMultiplePhotosSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -626,11 +760,10 @@ export default function BotiquinAppClient({
       setMedForm((prev) => ({ ...prev, fotos_input: updatedPhotos }))
       e.target.value = ''
 
-      if (modoCarga === 'hibrido_ia') {
-        await analyzePhotosWithAI(updatedPhotos)
-      } else {
-        showToast(`${compressedList.length} foto(s) agregada(s).`, 'info')
-      }
+      showToast(
+        `${compressedList.length} foto(s) cargada(s). Podés sumar más o presionar "Analizar".`,
+        'info'
+      )
     } catch (err) {
       console.error('Error procesando imágenes:', err)
       showToast('No se pudieron procesar las imágenes seleccionadas', 'error')
@@ -778,6 +911,8 @@ export default function BotiquinAppClient({
     if (e) e.preventDefault()
     if (!dosisModalMed) return
 
+    const familiarObj = (state.familia || []).find((f) => f.id === dosisFamiliarId)
+
     setSubmittingDosis(true)
     try {
       const res = await fetch('/api/botiquin', {
@@ -788,6 +923,8 @@ export default function BotiquinAppClient({
           id: dosisModalMed.id,
           cantidad: dosisCantidad,
           motivo: dosisMotivo,
+          familiar_id: familiarObj ? familiarObj.id : null,
+          familiar_nombre: familiarObj ? familiarObj.nombre : null,
         }),
       })
       const json = await res.json()
@@ -799,7 +936,7 @@ export default function BotiquinAppClient({
       setDosisMotivo('')
       showToast(
         `Se descontaron ${dosisCantidad} ${dosisModalMed.unidad} de ${dosisModalMed.nombre}${
-          json.emailSent ? ' • Se envió alerta por email' : ''
+          familiarObj ? ` (${familiarObj.nombre})` : ''
         }`,
         'success'
       )
@@ -811,6 +948,11 @@ export default function BotiquinAppClient({
   }
 
   async function handleQuickConsumeFromAI(medId: string, cantidad: number, nombre: string) {
+    const familiarObj =
+      selectedFamiliarId !== 'otro'
+        ? (state.familia || []).find((f) => f.id === selectedFamiliarId)
+        : null
+
     try {
       const res = await fetch('/api/botiquin', {
         method: 'POST',
@@ -820,6 +962,8 @@ export default function BotiquinAppClient({
           id: medId,
           cantidad,
           motivo: 'Dosis registrada desde el Consultorio IA',
+          familiar_id: familiarObj ? familiarObj.id : null,
+          familiar_nombre: familiarObj ? familiarObj.nombre : 'Otro',
         }),
       })
       const json = await res.json()
@@ -829,7 +973,7 @@ export default function BotiquinAppClient({
       setAlertas(json.alertasActivas)
       showToast(
         `Dosis descontada de ${nombre} (-${cantidad})${
-          json.emailSent ? ' • Alerta enviada por email' : ''
+          familiarObj ? ` • ${familiarObj.nombre}` : ''
         }`,
         'success'
       )
@@ -928,22 +1072,37 @@ export default function BotiquinAppClient({
     const queryText = (prefilledQuery ?? chatInput).trim()
     if (!queryText || consultingAI) return
 
-    const edadPesoParts: string[] = []
-    if (pacienteEdad.trim()) edadPesoParts.push(`Edad: ${pacienteEdad.trim()} años`)
-    if (pacientePeso.trim()) edadPesoParts.push(`Peso: ${pacientePeso.trim()} kg`)
-    const combinedEdadPeso = edadPesoParts.join(', ')
+    const familiarObj =
+      selectedFamiliarId !== 'otro'
+        ? (state.familia || []).find((f) => f.id === selectedFamiliarId) || null
+        : null
+
+    let labelPaciente = 'Otro'
+    let detalleEdadPeso = ''
+    let tipoParaIA: 'auto' | 'adulto' | 'pediatrico' = pacienteTipoOtro
+
+    if (familiarObj) {
+      const edadInfo = calcularEdadDesdeFecha(familiarObj.fecha_nacimiento)
+      labelPaciente = `${edadInfo.esPediatrico ? '👶' : '🧑'} ${familiarObj.nombre}`
+      const parts: string[] = [edadInfo.texto]
+      if (familiarObj.peso_kg) parts.push(`${familiarObj.peso_kg} kg`)
+      detalleEdadPeso = parts.join(' • ')
+      tipoParaIA = edadInfo.esPediatrico ? 'pediatrico' : 'adulto'
+    } else {
+      labelPaciente =
+        pacienteTipoOtro === 'pediatrico' ? '👶 Otro (Bebé/Niño)' : '🧑 Otro (Adulto)'
+      const edadPesoParts: string[] = []
+      if (pacienteEdad.trim()) edadPesoParts.push(`Edad: ${pacienteEdad.trim()} años`)
+      if (pacientePeso.trim()) edadPesoParts.push(`Peso: ${pacientePeso.trim()} kg`)
+      detalleEdadPeso = edadPesoParts.join(', ')
+    }
 
     const userMsg: ChatItem = {
       id: `u-${Date.now()}`,
       role: 'user',
       text: queryText,
-      pacienteTipo:
-        pacienteTipo === 'pediatrico'
-          ? '👶 Bebé'
-          : pacienteTipo === 'adulto'
-          ? '🧑 Adulto'
-          : 'Auto',
-      edadPeso: combinedEdadPeso,
+      pacienteTipo: labelPaciente,
+      edadPeso: detalleEdadPeso,
       timestamp: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }),
     }
 
@@ -962,13 +1121,20 @@ export default function BotiquinAppClient({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           consulta: queryText,
-          pacienteTipo,
-          edadPesoDetalle: combinedEdadPeso,
+          familiarId: familiarObj ? familiarObj.id : 'otro',
+          pacienteNombre: familiarObj ? familiarObj.nombre : labelPaciente,
+          pacienteTipo: tipoParaIA,
+          edadPesoDetalle: detalleEdadPeso,
+          pesoOverride: pacientePeso.trim() || null,
           historial: historialPayload,
         }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error)
+
+      if (json.state) {
+        setState(json.state)
+      }
 
       const aiMsg: ChatItem = {
         id: `a-${Date.now()}`,
@@ -983,6 +1149,139 @@ export default function BotiquinAppClient({
       showToast(msg, 'error')
     } finally {
       setConsultingAI(false)
+    }
+  }
+
+  // Family Member handlers
+  function openNewFamiliarModal() {
+    setEditingFamiliar(null)
+    setFamiliarForm({
+      id: '',
+      nombre: '',
+      fecha_nacimiento: '',
+      peso_kg: '',
+      antecedentes_medicos: '',
+      dolores_recurrentes: '',
+    })
+    setFamiliarModalOpen(true)
+  }
+
+  function openEditFamiliarModal(miembro: MiembroFamilia) {
+    setEditingFamiliar(miembro)
+    setFamiliarForm({
+      id: miembro.id,
+      nombre: miembro.nombre,
+      fecha_nacimiento: miembro.fecha_nacimiento || '',
+      peso_kg:
+        miembro.peso_kg !== null && miembro.peso_kg !== undefined
+          ? String(miembro.peso_kg)
+          : '',
+      antecedentes_medicos: miembro.antecedentes_medicos || '',
+      dolores_recurrentes: miembro.dolores_recurrentes || '',
+    })
+    setFamiliarModalOpen(true)
+  }
+
+  async function handleSaveFamiliar(e: React.FormEvent) {
+    e.preventDefault()
+    if (!familiarForm.nombre.trim()) {
+      showToast('Ingresá el nombre del integrante', 'error')
+      return
+    }
+    setSavingFamiliar(true)
+    try {
+      const res = await fetch('/api/botiquin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_familiar',
+          familiar: {
+            ...familiarForm,
+            peso_kg: familiarForm.peso_kg.trim() ? Number(familiarForm.peso_kg) : null,
+          },
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error)
+
+      setState(json.state)
+      setAlertas(json.alertasActivas)
+      if (json.miembro && selectedFamiliarId === 'otro' && state.familia.length === 0) {
+        setSelectedFamiliarId(json.miembro.id)
+      }
+      setFamiliarModalOpen(false)
+      const extraMsg =
+        json.nuevosEsencialesCount > 0
+          ? ` • Se sumaron ${json.nuevosEsencialesCount} esencial(es) al catálogo según su ficha`
+          : ''
+      showToast(`Integrante "${familiarForm.nombre}" guardado${extraMsg}`, 'success')
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Error guardando integrante', 'error')
+    } finally {
+      setSavingFamiliar(false)
+    }
+  }
+
+  async function handleDeleteFamiliar(id: string, nombre: string) {
+    if (!confirm(`¿Quitar a "${nombre}" del grupo familiar?`)) return
+    try {
+      const res = await fetch('/api/botiquin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_familiar', id }),
+      })
+      const json = await res.json()
+      if (json.ok) {
+        setState(json.state)
+        setAlertas(json.alertasActivas)
+        showToast(`"${nombre}" eliminado del grupo familiar`, 'info')
+      }
+    } catch {
+      showToast('Error eliminando integrante', 'error')
+    }
+  }
+
+  async function handleSyncEsencialesFamilia() {
+    try {
+      const res = await fetch('/api/botiquin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sync_esenciales_familia' }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error)
+      setState(json.state)
+      setAlertas(json.alertasActivas)
+      if (json.nuevosEsencialesCount > 0) {
+        showToast(
+          `Se agregaron ${json.nuevosEsencialesCount} producto(s) esencial(es) según las fichas familiares`,
+          'success'
+        )
+      } else {
+        showToast(
+          'El catálogo de esenciales ya cubre los antecedentes y edades de tu familia',
+          'info'
+        )
+      }
+    } catch {
+      showToast('Error actualizando esenciales', 'error')
+    }
+  }
+
+  async function handleDeleteConsultaHistorial(id: string) {
+    try {
+      const res = await fetch('/api/botiquin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_consulta_historial', id }),
+      })
+      const json = await res.json()
+      if (json.ok) {
+        setState(json.state)
+        showToast('Consulta eliminada del historial', 'info')
+      }
+    } catch {
+      showToast('Error eliminando consulta', 'error')
     }
   }
 
@@ -1099,6 +1398,14 @@ export default function BotiquinAppClient({
   const greyBtnActive =
     'bg-zinc-700 text-white border border-zinc-400 shadow-sm transition-colors'
 
+  const activeFamiliarObj = useMemo(
+    () =>
+      selectedFamiliarId !== 'otro'
+        ? (state.familia || []).find((f) => f.id === selectedFamiliarId) || null
+        : null,
+    [state.familia, selectedFamiliarId]
+  )
+
   return (
     <div className="min-h-screen flex flex-col bg-[#0b0c10] text-foreground pb-24 md:pb-8">
       {/* Toast Notification */}
@@ -1142,13 +1449,15 @@ export default function BotiquinAppClient({
               </span>
             </a>
 
-            {/* Desktop Nav Links (Anchor elements so right-click "Open in new tab/window" works) */}
+            {/* Desktop Nav Links: Stock | Consultorio IA | Historial | Configuración */}
             <div className="hidden md:flex items-center space-x-2">
               <a
                 href="/?tab=stock"
                 onClick={(e) => handleTabNavClick(e, 'stock')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  activeTab === 'stock' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
+                  activeTab === 'stock'
+                    ? greyBtnActive
+                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Package className="h-4 w-4" />
@@ -1159,7 +1468,9 @@ export default function BotiquinAppClient({
                 href="/?tab=consulta"
                 onClick={(e) => handleTabNavClick(e, 'consulta')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  activeTab === 'consulta' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
+                  activeTab === 'consulta'
+                    ? greyBtnActive
+                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
                 <Bot className="h-4 w-4" />
@@ -1167,25 +1478,29 @@ export default function BotiquinAppClient({
               </a>
 
               <a
-                href="/?tab=esenciales"
-                onClick={(e) => handleTabNavClick(e, 'esenciales')}
+                href="/?tab=historial"
+                onClick={(e) => handleTabNavClick(e, 'historial')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  activeTab === 'esenciales' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
+                  activeTab === 'historial'
+                    ? greyBtnActive
+                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
-                <Star className="h-4 w-4" />
-                <span>Esenciales</span>
+                <History className="h-4 w-4" />
+                <span>Historial</span>
               </a>
 
               <a
-                href="/?tab=alertas"
-                onClick={(e) => handleTabNavClick(e, 'alertas')}
+                href="/?tab=configuracion"
+                onClick={(e) => handleTabNavClick(e, 'configuracion')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  activeTab === 'alertas' ? greyBtnActive : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
+                  activeTab === 'configuracion'
+                    ? greyBtnActive
+                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
                 }`}
               >
-                <Bell className="h-4 w-4" />
-                <span>Alertas</span>
+                <Settings className="h-4 w-4" />
+                <span>Configuración</span>
               </a>
             </div>
           </div>
@@ -1221,24 +1536,92 @@ export default function BotiquinAppClient({
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className={`p-2 rounded-lg ${greyBtn}`}
+              aria-label="Menú"
             >
               {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
           </div>
         </div>
 
-        {/* Mobile Dropdown Menu */}
+        {/* Mobile Hamburger Dropdown Menu with all Sections + PWA Install + Sign Out */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-[#383e4e] mt-3 pt-4 pb-2 flex flex-col space-y-2">
-            <div className="text-xs text-muted-foreground px-2 pb-1 truncate">
-              Sesión: {userEmail}
-            </div>
-            <form action="/auth/signout" method="post">
-              <button className={`w-full flex items-center justify-center space-x-2 rounded-lg px-3 py-2 text-sm font-medium ${greyBtn}`}>
-                <LogOut className="h-4 w-4" />
-                <span>Salir</span>
+          <div className="md:hidden border-t border-[#383e4e] mt-3 pt-3 pb-2 flex flex-col space-y-1.5">
+            <a
+              href="/?tab=stock"
+              onClick={(e) => handleTabNavClick(e, 'stock')}
+              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
+                activeTab === 'stock'
+                  ? greyBtnActive
+                  : 'text-zinc-200 hover:bg-zinc-800/70'
+              }`}
+            >
+              <Package className="h-4 w-4" />
+              <span>Stock</span>
+            </a>
+
+            <a
+              href="/?tab=consulta"
+              onClick={(e) => handleTabNavClick(e, 'consulta')}
+              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
+                activeTab === 'consulta'
+                  ? greyBtnActive
+                  : 'text-zinc-200 hover:bg-zinc-800/70'
+              }`}
+            >
+              <Bot className="h-4 w-4" />
+              <span>Consultorio IA</span>
+            </a>
+
+            <a
+              href="/?tab=historial"
+              onClick={(e) => handleTabNavClick(e, 'historial')}
+              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
+                activeTab === 'historial'
+                  ? greyBtnActive
+                  : 'text-zinc-200 hover:bg-zinc-800/70'
+              }`}
+            >
+              <History className="h-4 w-4" />
+              <span>Historial</span>
+            </a>
+
+            <a
+              href="/?tab=configuracion"
+              onClick={(e) => handleTabNavClick(e, 'configuracion')}
+              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
+                activeTab === 'configuracion'
+                  ? greyBtnActive
+                  : 'text-zinc-200 hover:bg-zinc-800/70'
+              }`}
+            >
+              <Settings className="h-4 w-4" />
+              <span>Configuración</span>
+            </a>
+
+            {!isStandalonePWA && (
+              <button
+                type="button"
+                onClick={handleInstallPWA}
+                className={`w-full flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${greyBtn}`}
+              >
+                <Download className="h-4 w-4 text-primary" />
+                <span>Instalar</span>
               </button>
-            </form>
+            )}
+
+            <div className="border-t border-[#2e3444] pt-2 mt-1 flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground px-2 truncate">
+                {userEmail}
+              </span>
+              <form action="/auth/signout" method="post">
+                <button
+                  className={`flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span>Salir</span>
+                </button>
+              </form>
+            </div>
           </div>
         )}
       </nav>
@@ -1250,7 +1633,7 @@ export default function BotiquinAppClient({
         {/* ================================================================= */}
         {activeTab === 'stock' && (
           <div className="space-y-6">
-            {/* 3 Compact Top Summary Cards (Stock Actual removed) */}
+            {/* 3 Compact Top Summary Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div
                 onClick={() => setFilterEstado('proximo_vencer')}
@@ -1304,8 +1687,9 @@ export default function BotiquinAppClient({
 
               <div
                 onClick={() => {
-                  setActiveTab('esenciales')
-                  window.history.pushState(null, '', '/?tab=esenciales')
+                  setActiveTab('configuracion')
+                  setConfigSubTab('esenciales')
+                  window.history.pushState(null, '', '/?tab=configuracion&sub=esenciales')
                 }}
                 className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
               >
@@ -1337,7 +1721,7 @@ export default function BotiquinAppClient({
                   />
                 </div>
 
-                {/* Público Filter Pills (1-word grey buttons) */}
+                {/* Público Filter Pills */}
                 <div className="flex items-center space-x-2 overflow-x-auto pb-1 md:pb-0">
                   <button
                     onClick={() => setFilterPublico('todos')}
@@ -1440,6 +1824,10 @@ export default function BotiquinAppClient({
                       : []
 
                   const sintomasResumidos = resumirSintomas(med.para_que_sirve)
+                  const isFuncionOpen =
+                    activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'funcion'
+                  const isDosisOpen =
+                    activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'dosis'
 
                   return (
                     <div
@@ -1514,14 +1902,18 @@ export default function BotiquinAppClient({
 
                             {/* Styled custom tooltip for Nombre */}
                             <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
-                              <span className="block truncate">{formatEspacioMedida(med.nombre)}</span>
+                              <span className="block truncate">
+                                {formatEspacioMedida(med.nombre)}
+                              </span>
                               <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/nombre:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-2xl whitespace-normal break-words">
                                 {formatEspacioMedida(med.nombre)}
                               </span>
                             </h3>
                             <p className="text-xs text-muted-foreground truncate mt-0.5">
                               {formatEspacioMedida(med.droga) || 'Sin especificar'}{' '}
-                              {med.concentracion ? `• ${formatEspacioMedida(med.concentracion)}` : ''}
+                              {med.concentracion
+                                ? `• ${formatEspacioMedida(med.concentracion)}`
+                                : ''}
                             </p>
                           </div>
                         </div>
@@ -1565,10 +1957,26 @@ export default function BotiquinAppClient({
                         <div className="mt-4 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-1.5">
                           <button
                             type="button"
-                            className={`group/sirve relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${greyBtn}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setActiveCardTooltip((prev) =>
+                                prev?.medId === med.id && prev?.field === 'funcion'
+                                  ? null
+                                  : { medId: med.id, field: 'funcion' }
+                              )
+                            }}
+                            className={`group/sirve relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${
+                              isFuncionOpen ? greyBtnActive : greyBtn
+                            }`}
                           >
                             <span>Función</span>
-                            <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/sirve:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                            <span
+                              className={`pointer-events-none absolute left-0 bottom-full mb-1.5 ${
+                                isFuncionOpen
+                                  ? 'block'
+                                  : 'hidden md:group-hover/sirve:block'
+                              } z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
+                            >
                               <strong className="text-red-300 block mb-0.5">Función:</strong>
                               {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
                             </span>
@@ -1576,10 +1984,26 @@ export default function BotiquinAppClient({
 
                           <button
                             type="button"
-                            className={`group/dosis relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${greyBtn}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setActiveCardTooltip((prev) =>
+                                prev?.medId === med.id && prev?.field === 'dosis'
+                                  ? null
+                                  : { medId: med.id, field: 'dosis' }
+                              )
+                            }}
+                            className={`group/dosis relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${
+                              isDosisOpen ? greyBtnActive : greyBtn
+                            }`}
                           >
                             <span>Dosis</span>
-                            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover/dosis:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed">
+                            <span
+                              className={`pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 ${
+                                isDosisOpen
+                                  ? 'block'
+                                  : 'hidden md:group-hover/dosis:block'
+                              } z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
+                            >
                               <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
                               {med.posologia_referencia || 'Sin especificar'}
                             </span>
@@ -1592,6 +2016,11 @@ export default function BotiquinAppClient({
                               setDosisModalMed(med)
                               setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
                               setDosisMotivo('')
+                              setDosisFamiliarId(
+                                state.familia && state.familia.length > 0
+                                  ? state.familia[0].id
+                                  : ''
+                              )
                             }}
                             title="Usar / Descontar dosis"
                             className={`px-2.5 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
@@ -1668,146 +2097,188 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 2: CONSULTORIO IA (EQUAL HEIGHT BLOCKS + MEDICAL ROBOT)       */}
+        {/* TAB 2: CONSULTORIO IA (FAMILY MEMBERS + 'OTRO' + PERSONALIZED AI) */}
         {/* ================================================================= */}
         {activeTab === 'consulta' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
-            {/* Left Column: Patient Selector + Numeric Edad/Peso + Virtual Medical Robot */}
-            <div className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-4 lg:h-[calc(100vh-175px)] lg:min-h-[380px] lg:max-h-[480px] overflow-hidden">
+            {/* Left Column: Family Member Selector + 'Otro' + Virtual Medical Robot */}
+            <div className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-4 lg:h-[calc(100vh-175px)] lg:min-h-[390px] lg:max-h-[490px] overflow-hidden">
               <div className="space-y-3 shrink-0">
-                <div className="flex items-center space-x-2.5">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/30">
-                    <Bot className="h-4 w-4" />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/30">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                    <h2 className="text-base font-bold text-foreground">
+                      Consultorio IA
+                    </h2>
                   </div>
-                  <h2 className="text-base font-bold text-foreground">
-                    Consultorio IA
-                  </h2>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('configuracion')
+                      setConfigSubTab('familia')
+                    }}
+                    className="text-[11px] text-primary hover:underline font-medium"
+                  >
+                    + Familia
+                  </button>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
                     ¿Para quién es la consulta?
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="flex flex-wrap gap-1.5 max-h-[82px] overflow-y-auto pr-0.5">
+                    {(state.familia || []).map((miembro) => {
+                      const edadInfo = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
+                      const selected = selectedFamiliarId === miembro.id
+                      return (
+                        <button
+                          key={miembro.id}
+                          type="button"
+                          onClick={() => setSelectedFamiliarId(miembro.id)}
+                          className={`flex items-center space-x-1.5 py-1.5 px-2.5 rounded-lg text-xs font-medium ${
+                            selected ? greyBtnActive : greyBtn
+                          }`}
+                        >
+                          <span>{edadInfo.esPediatrico ? '👶' : '🧑'}</span>
+                          <span className="truncate max-w-[100px]">{miembro.nombre}</span>
+                        </button>
+                      )
+                    })}
+
                     <button
                       type="button"
-                      onClick={() => setPacienteTipo('auto')}
-                      className={`py-1.5 px-2 rounded-lg text-xs font-medium ${
-                        pacienteTipo === 'auto' ? greyBtnActive : greyBtn
+                      onClick={() => setSelectedFamiliarId('otro')}
+                      className={`flex items-center space-x-1 py-1.5 px-2.5 rounded-lg text-xs font-medium ${
+                        selectedFamiliarId === 'otro' ? greyBtnActive : greyBtn
                       }`}
                     >
-                      Auto
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPacienteTipo('pediatrico')}
-                      className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg text-xs font-medium ${
-                        pacienteTipo === 'pediatrico' ? greyBtnActive : greyBtn
-                      }`}
-                    >
-                      <Baby className="h-3.5 w-3.5" />
-                      <span>Bebé</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPacienteTipo('adulto')}
-                      className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg text-xs font-medium ${
-                        pacienteTipo === 'adulto' ? greyBtnActive : greyBtn
-                      }`}
-                    >
-                      <User className="h-3.5 w-3.5" />
-                      <span>Adulto</span>
+                      <Users className="h-3.5 w-3.5" />
+                      <span>Otro</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground block">
-                      Edad (opcional):
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="120"
-                      step="1"
-                      inputMode="numeric"
-                      value={pacienteEdad}
-                      onChange={(e) => setPacienteEdad(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="Años"
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
-                    />
+                {/* Selected Family Member summary OR 'Otro' manual inputs */}
+                {activeFamiliarObj ? (
+                  <div className="rounded-xl border border-[#2c3242] bg-[#0e1016] px-3 py-2 text-xs space-y-1">
+                    <div className="flex items-center justify-between text-zinc-200 font-medium">
+                      <span>
+                        Edad:{' '}
+                        <strong>
+                          {calcularEdadDesdeFecha(activeFamiliarObj.fecha_nacimiento).texto}
+                        </strong>
+                      </span>
+                      <span>
+                        Peso:{' '}
+                        <strong>
+                          {activeFamiliarObj.peso_kg
+                            ? `${activeFamiliarObj.peso_kg} kg`
+                            : 'Sin cargar'}
+                        </strong>
+                      </span>
+                    </div>
+                    {(activeFamiliarObj.antecedentes_medicos ||
+                      activeFamiliarObj.dolores_recurrentes) && (
+                      <p className="text-[11px] text-muted-foreground line-clamp-2">
+                        {[
+                          activeFamiliarObj.antecedentes_medicos,
+                          activeFamiliarObj.dolores_recurrentes,
+                        ]
+                          .filter(Boolean)
+                          .join(' • ')}
+                      </p>
+                    )}
                   </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setPacienteTipoOtro('pediatrico')}
+                        className={`flex items-center justify-center space-x-1 py-1 px-2 rounded-lg text-xs font-medium ${
+                          pacienteTipoOtro === 'pediatrico' ? greyBtnActive : greyBtn
+                        }`}
+                      >
+                        <Baby className="h-3.5 w-3.5" />
+                        <span>Bebé</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPacienteTipoOtro('adulto')}
+                        className={`flex items-center justify-center space-x-1 py-1 px-2 rounded-lg text-xs font-medium ${
+                          pacienteTipoOtro === 'adulto' ? greyBtnActive : greyBtn
+                        }`}
+                      >
+                        <User className="h-3.5 w-3.5" />
+                        <span>Adulto</span>
+                      </button>
+                    </div>
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground block">
-                      Peso kg (opcional):
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="300"
-                      step="0.1"
-                      inputMode="decimal"
-                      value={pacientePeso}
-                      onChange={(e) => setPacientePeso(e.target.value.replace(/[^0-9.]/g, ''))}
-                      placeholder="Kg"
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
-                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="120"
+                          step="1"
+                          inputMode="numeric"
+                          value={pacienteEdad}
+                          onChange={(e) => setPacienteEdad(e.target.value.replace(/[^0-9]/g, ''))}
+                          placeholder="Edad (años)"
+                          className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="300"
+                          step="0.1"
+                          inputMode="decimal"
+                          value={pacientePeso}
+                          onChange={(e) => setPacientePeso(e.target.value.replace(/[^0-9.]/g, ''))}
+                          placeholder="Peso (kg)"
+                          className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-2.5 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Virtual Medical Robot Character compactly fitting inside the card margins */}
-              <div className="mt-3 flex-1 min-h-0 flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-2 text-center overflow-hidden">
+              <div className="mt-2.5 flex-1 min-h-0 flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-2 text-center overflow-hidden">
                 <svg
                   viewBox="0 0 180 145"
-                  className="h-16 w-20 md:h-20 md:w-24 shrink-0 drop-shadow-md"
+                  className="h-14 w-18 md:h-16 md:w-20 shrink-0 drop-shadow-md"
                   fill="none"
                   xmlns="http://www.w3.org/2000/svg"
                 >
-                  {/* Antenna */}
                   <line x1="90" y1="8" x2="90" y2="22" stroke="#525b70" strokeWidth="3" strokeLinecap="round" />
                   <circle cx="90" cy="7" r="5" fill="#f87171" />
-
-                  {/* Head */}
                   <rect x="48" y="22" width="84" height="54" rx="18" fill="#232836" stroke="#4a5264" strokeWidth="2.5" />
-
-                  {/* Ears / Audio Sensors */}
                   <rect x="40" y="38" width="8" height="20" rx="4" fill="#363d4f" />
                   <rect x="132" y="38" width="8" height="20" rx="4" fill="#363d4f" />
-
-                  {/* Doctor Head Mirror / Badge on Forehead */}
                   <rect x="78" y="16" width="24" height="14" rx="5" fill="#171a22" stroke="#4a5264" strokeWidth="2" />
                   <path d="M90 19V27M86 23H94" stroke="#f87171" strokeWidth="2.5" strokeLinecap="round" />
-
-                  {/* Face Visor Screen */}
                   <rect x="58" y="34" width="64" height="32" rx="10" fill="#0e1016" stroke="#323846" strokeWidth="1.5" />
-
-                  {/* Glowing Friendly Eyes */}
                   <circle cx="75" cy="48" r="5" fill="#f87171" />
                   <circle cx="77" cy="46" r="1.5" fill="#ffffff" />
                   <circle cx="105" cy="48" r="5" fill="#f87171" />
                   <circle cx="107" cy="46" r="1.5" fill="#ffffff" />
-
-                  {/* Friendly Smile */}
                   <path d="M82 57C85 60 95 60 98 57" stroke="#f87171" strokeWidth="2.2" strokeLinecap="round" />
-
-                  {/* Neck */}
                   <rect x="80" y="76" width="20" height="8" rx="2" fill="#363d4f" />
-
-                  {/* Doctor Torso / Coat */}
                   <path
                     d="M44 100C44 90.0589 52.0589 82 62 82H118C127.941 82 136 90.0589 136 100V136C136 138.209 134.209 140 132 140H48C45.7909 140 44 138.209 44 136V100Z"
                     fill="#232836"
                     stroke="#4a5264"
                     strokeWidth="2.5"
                   />
-
-                  {/* Medical Coat Lapels */}
                   <path d="M74 82L90 106L106 82" stroke="#383f4e" strokeWidth="2" strokeLinejoin="round" />
-
-                  {/* Stethoscope around neck */}
                   <path
                     d="M68 83C68 102 74 114 90 114C106 114 112 102 112 83"
                     stroke="#9ca3af"
@@ -1817,22 +2288,22 @@ export default function BotiquinAppClient({
                   <line x1="90" y1="114" x2="90" y2="125" stroke="#9ca3af" strokeWidth="3" />
                   <circle cx="90" cy="128" r="6" fill="#171a22" stroke="#f87171" strokeWidth="2.5" />
                   <circle cx="90" cy="128" r="2" fill="#f87171" />
-
-                  {/* Pocket Heart Pulse Badge */}
                   <rect x="108" y="106" width="18" height="14" rx="3" fill="#14171f" stroke="#383f4e" strokeWidth="1.5" />
                   <path d="M111 113H114L116 109L118 117L120 113H123" stroke="#f87171" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                <span className="text-xs font-semibold text-zinc-200 mt-1">
+                <span className="text-xs font-semibold text-zinc-200 mt-0.5">
                   Dr. Botiquín IA
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  Asistente médico virtual
+                  {activeFamiliarObj
+                    ? `Personalizado para ${activeFamiliarObj.nombre}`
+                    : 'Asistente médico virtual'}
                 </span>
               </div>
             </div>
 
             {/* Right 2 Columns: Equal-Height Chat Box */}
-            <div className="lg:col-span-2 flex flex-col rounded-2xl border border-[#323846] bg-[#171a22] overflow-hidden h-[calc(100vh-175px)] min-h-[380px] max-h-[480px]">
+            <div className="lg:col-span-2 flex flex-col rounded-2xl border border-[#323846] bg-[#171a22] overflow-hidden h-[calc(100vh-175px)] min-h-[390px] max-h-[490px]">
               {/* Chat Messages Area */}
               <div className="flex-1 p-4 md:p-5 space-y-4 overflow-y-auto">
                 {chatMessages.length === 0 ? (
@@ -1844,7 +2315,9 @@ export default function BotiquinAppClient({
                       Hacé una consulta médica sobre tu Botiquín
                     </h3>
                     <p className="mt-1.5 text-xs text-muted-foreground max-w-md">
-                      Escribí qué síntoma tenés vos o el bebé para revisar qué medicamentos vigentes tenés en stock.
+                      {activeFamiliarObj
+                        ? `El Dr. Botiquín IA tendrá en cuenta la edad, peso, antecedentes, dolores frecuentes e historial de ${activeFamiliarObj.nombre}.`
+                        : 'Seleccioná un integrante de la familia (o "Otro") y escribí el síntoma para revisar tu stock vigente.'}
                     </p>
                   </div>
                 ) : (
@@ -1901,7 +2374,7 @@ export default function BotiquinAppClient({
                                           </span>
                                         </div>
                                         <div className="text-xs text-zinc-300 mt-0.5">
-                                          <strong>Dosis recomendada:</strong>{' '}
+                                          <strong>Dosis:</strong>{' '}
                                           {renderInlineBold(rec.dosis_sugerida)}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5">
@@ -2006,7 +2479,7 @@ export default function BotiquinAppClient({
                 {consultingAI && (
                   <div className="flex items-center space-x-3 rounded-2xl border border-[#323846] bg-[#0e1016] p-3.5 text-xs text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    <span>Analizando tu stock disponible...</span>
+                    <span>Analizando tu stock y el historial del paciente...</span>
                   </div>
                 )}
               </div>
@@ -2044,326 +2517,819 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 3: ESENCIALES (SIMPLIFIED TABLE LIST, SORTED BY PÚBLICO)      */}
+        {/* TAB 3: HISTORIAL (PATIENT CONSULTATIONS & MEDICATION CONSUMPTIONS)*/}
         {/* ================================================================= */}
-        {activeTab === 'esenciales' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
-              <div className="flex items-center space-x-2.5">
-                <Star className="h-4 w-4 text-primary" />
-                <h2 className="text-sm font-bold text-foreground">Esenciales</h2>
-                <span className="text-xs text-muted-foreground">
-                  ({kpis.esencialesCubiertos}/{kpis.esencialesTotal} cubiertos)
-                </span>
-              </div>
-              <button
-                onClick={openNewEsencialModal}
-                className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
-              >
-                <span>+ Esencial</span>
-              </button>
-            </div>
-
-            <div className="rounded-xl border border-[#323846] bg-[#171a22] overflow-hidden">
-              <table className="w-full table-fixed text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#2c313f] bg-[#12151c] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    <th className="w-[21%] py-2.5 pl-3.5 pr-2">Categoría</th>
-                    <th className="w-[17%] py-2.5 px-2">Principal Activo</th>
-                    <th className="w-[8%] py-2.5 px-1.5 text-center">Público</th>
-                    <th className="w-[24%] py-2.5 px-2">Síntomas</th>
-                    <th className="w-[18%] py-2.5 px-2">Marcas sugeridas</th>
-                    <th className="w-[12%] py-2.5 pl-2 pr-3.5 text-right">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#262b38] text-xs">
-                  {sortedEsenciales.map((esc) => {
-                    const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
-                      esc,
-                      state.medicamentos
-                    )
-                    return (
-                      <tr
-                        key={esc.id}
-                        className={`transition-colors hover:bg-[#1c202b] ${
-                          !esc.activo ? 'opacity-50' : ''
-                        }`}
-                      >
-                        {/* 1. Categoría: Grey tag if in stock, Heart-icon style (bg-primary/15 border-primary/40 text-primary) if missing */}
-                        <td className="py-2 pl-3.5 pr-2 align-middle">
-                          <span
-                            className={`inline-block rounded-xl px-2.5 py-1 text-xs font-semibold leading-snug break-words ${
-                              cubierto
-                                ? 'bg-zinc-700 text-white border border-zinc-400'
-                                : 'bg-primary/15 border border-primary/40 text-primary'
-                            }`}
-                            title={
-                              cubierto
-                                ? `En stock: ${medicamentosQueCubren
-                                    .map((m) => m.nombre)
-                                    .join(', ')}`
-                                : 'Sin stock disponible'
-                            }
-                          >
-                            {formatCategoriaEsencial(esc)}
-                          </span>
-                        </td>
-
-                        {/* 2. Principal Activo */}
-                        <td className="py-2 px-2 text-zinc-200 leading-snug break-words align-middle">
-                          {formatPrincipalActivoEsencial(esc)}
-                        </td>
-
-                        {/* 3. Público: Only emoji, 50% larger */}
-                        <td className="py-2 px-1.5 text-center align-middle">
-                          {esc.publico === 'pediatrico' ? (
-                            <span
-                              className="inline-block text-lg leading-none select-none"
-                              title="Bebé / Pediátrico"
-                            >
-                              👶
-                            </span>
-                          ) : esc.publico === 'ambos' ? (
-                            <span
-                              className="inline-block text-lg leading-none select-none"
-                              title="Familia"
-                            >
-                              👨‍👩‍👧
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-block text-lg leading-none select-none"
-                              title="Adultos"
-                            >
-                              🧑
-                            </span>
-                          )}
-                        </td>
-
-                        {/* 4. Síntomas */}
-                        <td
-                          className="py-2 px-2 text-muted-foreground leading-snug break-words align-middle"
-                          title={esc.descripcion}
-                        >
-                          {formatSintomasEsencial(esc)}
-                        </td>
-
-                        {/* 5. Marcas sugeridas */}
-                        <td
-                          className="py-2 px-2 text-zinc-300 leading-snug break-words align-middle"
-                          title={formatMarcasSugeridas(esc)}
-                        >
-                          {formatMarcasSugeridas(esc)}
-                        </td>
-
-                        {/* 6. Acciones: + Stock (Plus icon), Editar (Pencil icon), Eliminar (Trash icon) */}
-                        <td className="py-2 pl-2 pr-3.5 text-right align-middle">
-                          <div className="inline-flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openNewMedModal({
-                                  nombre: esc.nombre,
-                                  droga: esc.droga_sugerida,
-                                  publico: esc.publico,
-                                  categoria: esc.categoria,
-                                  unidad: esc.unidad_sugerida,
-                                  cantidad_actual: esc.unidad_sugerida === 'ml' ? 100 : 10,
-                                  cantidad_inicial: esc.unidad_sugerida === 'ml' ? 100 : 10,
-                                  es_esencial: true,
-                                  esencial_id: esc.id,
-                                })
-                              }
-                              className={`p-1.5 rounded-lg ${greyBtn}`}
-                              title="+ Stock"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => openEditEsencialModal(esc)}
-                              className={`p-1.5 rounded-lg ${greyBtn}`}
-                              title="Editar"
-                            >
-                              <Edit3 className="h-3.5 w-3.5" />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
-                              className={`p-1.5 rounded-lg ${greyBtn}`}
-                              title="Eliminar"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* TAB 4: ALERTAS (COMPACT HEIGHT, UNIFIED CHECKBOX, GREY TAGS)      */}
-        {/* ================================================================= */}
-        {activeTab === 'alertas' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
-            {/* Settings Form */}
-            <form
-              onSubmit={handleSaveConfig}
-              className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-5 space-y-3.5"
-            >
-              <div className="space-y-3.5">
-                <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
-                  <Settings className="h-4 w-4 text-primary" />
-                  <span>Configuración</span>
-                </h3>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2 space-y-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Email destinatario de las alertas:
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={configForm.email_alertas}
-                      onChange={(e) =>
-                        setConfigForm({ ...configForm, email_alertas: e.target.value })
-                      }
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-1.5 text-sm text-foreground"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-foreground">
-                      Anticipación (días):
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={configForm.dias_proximo_vencer}
-                      onChange={(e) =>
-                        setConfigForm({
-                          ...configForm,
-                          dias_proximo_vencer: Number(e.target.value || 30),
-                        })
-                      }
-                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-1.5 text-sm text-foreground"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2 pt-1">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
-                    Alertas automáticas:
-                  </span>
-
-                  <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(configForm.alertar_proximo_vencer)}
-                      onChange={(e) =>
-                        setConfigForm({
-                          ...configForm,
-                          alertar_proximo_vencer: e.target.checked,
-                        })
-                      }
-                      className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
-                    />
-                    <span>⏳ Producto próximo a vencer</span>
-                  </label>
-
-                  <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(configForm.alertar_vencido || configForm.alertar_sin_stock)}
-                      onChange={(e) =>
-                        setConfigForm({
-                          ...configForm,
-                          alertar_vencido: e.target.checked,
-                          alertar_sin_stock: e.target.checked,
-                        })
-                      }
-                      className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
-                    />
-                    <span>🚨 Producto vencido / sin stock</span>
-                  </label>
-
-                  <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(configForm.alertar_esencial_faltante)}
-                      onChange={(e) =>
-                        setConfigForm({
-                          ...configForm,
-                          alertar_esencial_faltante: e.target.checked,
-                        })
-                      }
-                      className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
-                    />
-                    <span>⭐ Producto esencial faltante</span>
-                  </label>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={savingConfig}
-                className={`w-full rounded-xl px-4 py-2 text-sm font-semibold ${greyBtn}`}
-              >
-                {savingConfig ? 'Guardando...' : 'Guardar'}
-              </button>
-            </form>
-
-            {/* Movements Log */}
-            <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-5 flex flex-col space-y-3.5">
-              <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
-                <History className="h-4 w-4 text-primary" />
-                <span>Últimos Movimientos</span>
-              </h3>
-
-              {state.movimientos.length === 0 ? (
-                <p className="text-xs text-muted-foreground py-6 text-center">
-                  Todavía no hay movimientos registrados.
-                </p>
-              ) : (
-                <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                  {state.movimientos.slice(0, 30).map((mov) => (
-                    <div
-                      key={mov.id}
-                      className="rounded-xl border border-[#2c313f] bg-[#0e1016] px-3 py-2.5 flex items-center justify-between text-xs"
+        {activeTab === 'historial' && (
+          <div className="space-y-4">
+            {/* Top Bar: Patient Filter + View Switcher */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] p-4">
+              <div className="flex items-center flex-wrap gap-1.5">
+                <button
+                  onClick={() => setHistorialFilterFamiliarId('todos')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                    historialFilterFamiliarId === 'todos' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  Todos
+                </button>
+                {(state.familia || []).map((miembro) => {
+                  const edadInfo = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
+                  return (
+                    <button
+                      key={miembro.id}
+                      onClick={() => setHistorialFilterFamiliarId(miembro.id)}
+                      className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium ${
+                        historialFilterFamiliarId === miembro.id ? greyBtnActive : greyBtn
+                      }`}
                     >
-                      <div>
-                        <div className="font-semibold text-foreground flex items-center flex-wrap gap-1.5">
-                          <span>{mov.medicamento_nombre}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] uppercase bg-zinc-700 text-white font-semibold">
-                            {mov.tipo}
-                          </span>
+                      <span>{edadInfo.esPediatrico ? '👶' : '🧑'}</span>
+                      <span>{miembro.nombre}</span>
+                    </button>
+                  )
+                })}
+                <button
+                  onClick={() => setHistorialFilterFamiliarId('otro')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                    historialFilterFamiliarId === 'otro' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  Otro
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setHistorialVista('consultas')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                    historialVista === 'consultas' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  Consultas IA ({(state.consultas_historial || []).length})
+                </button>
+                <button
+                  onClick={() => setHistorialVista('consumos')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                    historialVista === 'consumos' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  Consumos (
+                  {(state.movimientos || []).filter((m) => m.tipo === 'consumo').length})
+                </button>
+              </div>
+            </div>
+
+            {historialVista === 'consultas' ? (
+              (() => {
+                const filteredConsultas = (state.consultas_historial || []).filter((c) => {
+                  if (historialFilterFamiliarId === 'todos') return true
+                  if (historialFilterFamiliarId === 'otro') {
+                    return c.familiar_id === 'otro' || !c.familiar_id
+                  }
+                  const fam = (state.familia || []).find(
+                    (f) => f.id === historialFilterFamiliarId
+                  )
+                  return (
+                    c.familiar_id === historialFilterFamiliarId ||
+                    (fam && c.paciente_nombre.toLowerCase() === fam.nombre.toLowerCase())
+                  )
+                })
+
+                if (filteredConsultas.length === 0) {
+                  return (
+                    <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
+                      <Bot className="mx-auto h-10 w-10 text-muted-foreground/50 mb-2.5" />
+                      <h3 className="text-sm font-semibold text-foreground">
+                        No hay consultas registradas para este filtro
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Cada consulta que realices en el Consultorio IA quedará guardada acá para personalizar futuras respuestas.
+                      </p>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {filteredConsultas.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 space-y-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center flex-wrap gap-2">
+                            <span className="inline-flex items-center space-x-1 rounded-xl bg-primary/15 border border-primary/40 px-2.5 py-0.5 text-xs font-semibold text-primary">
+                              <span>
+                                {item.paciente_publico === 'pediatrico' ? '👶' : '🧑'}
+                              </span>
+                              <span>{item.paciente_nombre}</span>
+                            </span>
+                            {item.edad_texto && (
+                              <span className="text-xs text-muted-foreground">
+                                {item.edad_texto}
+                                {item.peso_kg ? ` • ${item.peso_kg} kg` : ''}
+                              </span>
+                            )}
+                            <span className="text-xs text-muted-foreground">
+                              •{' '}
+                              {new Date(item.created_at).toLocaleDateString('es-AR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteConsultaHistorial(item.id)}
+                            className={`p-1.5 rounded-lg ${greyBtn}`}
+                            title="Eliminar consulta"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
-                        <p className="text-muted-foreground mt-0.5">{mov.motivo}</p>
+
+                        <div className="rounded-xl bg-[#0e1016] border border-[#282d3b] px-3.5 py-2 text-xs">
+                          <strong className="text-zinc-300">Consulta:</strong>{' '}
+                          <span className="text-foreground">{item.consulta}</span>
+                        </div>
+
+                        <div className="text-xs text-zinc-200 leading-relaxed pl-1 space-y-0.5">
+                          {renderFormattedChatText(item.respuesta_markdown)}
+                        </div>
                       </div>
-                      <div className="text-right text-muted-foreground shrink-0 ml-2">
+                    ))}
+                  </div>
+                )
+              })()
+            ) : (
+              (() => {
+                const filteredConsumos = (state.movimientos || []).filter((m) => {
+                  if (m.tipo !== 'consumo') return false
+                  if (historialFilterFamiliarId === 'todos') return true
+                  if (historialFilterFamiliarId === 'otro') {
+                    return !m.familiar_id || m.familiar_id === 'otro'
+                  }
+                  const fam = (state.familia || []).find(
+                    (f) => f.id === historialFilterFamiliarId
+                  )
+                  return (
+                    m.familiar_id === historialFilterFamiliarId ||
+                    (fam &&
+                      ((m.familiar_nombre &&
+                        m.familiar_nombre.toLowerCase() === fam.nombre.toLowerCase()) ||
+                        m.motivo.toLowerCase().includes(fam.nombre.toLowerCase())))
+                  )
+                })
+
+                if (filteredConsumos.length === 0) {
+                  return (
+                    <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
+                      <History className="mx-auto h-10 w-10 text-muted-foreground/50 mb-2.5" />
+                      <h3 className="text-sm font-semibold text-foreground">
+                        No hay consumos de medicamentos registrados para este filtro
+                      </h3>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 space-y-2">
+                    {filteredConsumos.map((mov) => (
+                      <div
+                        key={mov.id}
+                        className="rounded-xl border border-[#2c313f] bg-[#0e1016] px-3.5 py-2.5 flex items-center justify-between text-xs"
+                      >
                         <div>
+                          <div className="font-semibold text-foreground flex items-center flex-wrap gap-1.5">
+                            <span>{formatEspacioMedida(mov.medicamento_nombre)}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-700 text-white font-semibold">
+                              -{mov.cantidad} {mov.unidad}
+                            </span>
+                            {mov.familiar_nombre && (
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] bg-primary/15 border border-primary/40 text-primary font-semibold">
+                                {mov.familiar_nombre}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-muted-foreground mt-0.5">{mov.motivo}</p>
+                        </div>
+                        <div className="text-right text-muted-foreground shrink-0 ml-2">
                           {new Date(mov.created_at).toLocaleDateString('es-AR', {
                             day: '2-digit',
                             month: '2-digit',
+                            year: '2-digit',
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )
+              })()
+            )}
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 4: CONFIGURACIÓN (SUBSECCIONES: FAMILIA | ESENCIALES | ALERTAS) */}
+        {/* ================================================================= */}
+        {activeTab === 'configuracion' && (
+          <div className="space-y-4">
+            {/* Sub-navigation bar inside Configuración */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+              <div className="flex items-center flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    setConfigSubTab('familia')
+                    window.history.pushState(null, '', '/?tab=configuracion&sub=familia')
+                  }}
+                  className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
+                    configSubTab === 'familia' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  <span>Familia</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setConfigSubTab('esenciales')
+                    window.history.pushState(null, '', '/?tab=configuracion&sub=esenciales')
+                  }}
+                  className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
+                    configSubTab === 'esenciales' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  <Star className="h-3.5 w-3.5" />
+                  <span>Esenciales</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setConfigSubTab('alertas')
+                    window.history.pushState(null, '', '/?tab=configuracion&sub=alertas')
+                  }}
+                  className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
+                    configSubTab === 'alertas' ? greyBtnActive : greyBtn
+                  }`}
+                >
+                  <Bell className="h-3.5 w-3.5" />
+                  <span>Alertas</span>
+                </button>
+              </div>
+
+              {!isStandalonePWA && (
+                <button
+                  type="button"
+                  onClick={handleInstallPWA}
+                  className={`flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
+                >
+                  <Download className="h-3.5 w-3.5 text-primary" />
+                  <span>Instalar</span>
+                </button>
               )}
             </div>
+
+            {/* ------------------------------------------------------------- */}
+            {/* SUBSECCIÓN 4.1: MIEMBROS DE LA FAMILIA                        */}
+            {/* ------------------------------------------------------------- */}
+            {configSubTab === 'familia' && (
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+                  <div>
+                    <h2 className="text-sm font-bold text-foreground">
+                      Miembros de la Familia
+                    </h2>
+                    <p className="text-xs text-muted-foreground">
+                      Calcula automáticamente las edades, adapta el catálogo de Esenciales y personaliza el Consultorio IA.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {(state.familia || []).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleSyncEsencialesFamilia}
+                        className={`flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
+                        title="Actualizar catálogo de Esenciales según las fichas médicas familiares"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-primary" />
+                        <span>Adaptar</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={openNewFamiliarModal}
+                      className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
+                    >
+                      <span>+ Integrante</span>
+                    </button>
+                  </div>
+                </div>
+
+                {(state.familia || []).length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
+                    <Users className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
+                    <h3 className="text-base font-semibold text-foreground">
+                      Todavía no cargaste integrantes de la familia
+                    </h3>
+                    <p className="mt-1 text-xs text-muted-foreground max-w-md mx-auto">
+                      Agregá a cada integrante con su fecha de nacimiento, peso, antecedentes médicos y dolores recurrentes.
+                    </p>
+                    <button
+                      onClick={openNewFamiliarModal}
+                      className={`mt-4 inline-flex items-center space-x-2 rounded-xl px-5 py-2 text-xs font-semibold ${greyBtnActive}`}
+                    >
+                      <span>+ Integrante</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(state.familia || []).map((miembro) => {
+                      const edadInfo = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
+                      const consumosMiembro = (state.movimientos || []).filter(
+                        (m) =>
+                          m.tipo === 'consumo' &&
+                          (m.familiar_id === miembro.id ||
+                            (m.familiar_nombre &&
+                              m.familiar_nombre.toLowerCase() ===
+                                miembro.nombre.toLowerCase()) ||
+                            m.motivo.toLowerCase().includes(miembro.nombre.toLowerCase()))
+                      )
+                      const consultasMiembro = (state.consultas_historial || []).filter(
+                        (c) =>
+                          c.familiar_id === miembro.id ||
+                          c.paciente_nombre.toLowerCase() === miembro.nombre.toLowerCase()
+                      )
+
+                      return (
+                        <div
+                          key={miembro.id}
+                          className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 flex flex-col justify-between space-y-3"
+                        >
+                          <div className="space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center space-x-2.5">
+                                <span className="text-2xl leading-none select-none">
+                                  {edadInfo.esPediatrico ? '👶' : '🧑'}
+                                </span>
+                                <div>
+                                  <h3 className="text-base font-bold text-foreground leading-tight">
+                                    {miembro.nombre}
+                                  </h3>
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    Edad: <strong className="text-zinc-200">{edadInfo.texto}</strong>
+                                    {miembro.peso_kg ? (
+                                      <>
+                                        {' '}
+                                        • Peso:{' '}
+                                        <strong className="text-zinc-200">
+                                          {miembro.peso_kg} kg
+                                        </strong>
+                                      </>
+                                    ) : null}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditFamiliarModal(miembro)}
+                                  className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  title="Editar"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteFamiliar(miembro.id, miembro.nombre)
+                                  }
+                                  className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  title="Eliminar"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl bg-[#0e1016] border border-[#282d3b] p-3 text-xs space-y-1.5">
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Antecedentes médicos / Alergias:
+                                </span>{' '}
+                                <span className="text-zinc-200">
+                                  {miembro.antecedentes_medicos || 'Sin especificar'}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">
+                                  Dolores o síntomas recurrentes:
+                                </span>{' '}
+                                <span className="text-zinc-200">
+                                  {miembro.dolores_recurrentes || 'Sin especificar'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Recent consumptions of this family member */}
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span>
+                                  Consumos del botiquín ({consumosMiembro.length}) • Consultas IA (
+                                  {consultasMiembro.length})
+                                </span>
+                                {(consumosMiembro.length > 0 || consultasMiembro.length > 0) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setHistorialFilterFamiliarId(miembro.id)
+                                      setActiveTab('historial')
+                                    }}
+                                    className="text-primary hover:underline font-medium"
+                                  >
+                                    Ver historial
+                                  </button>
+                                )}
+                              </div>
+
+                              {consumosMiembro.length > 0 && (
+                                <div className="space-y-1 pt-1">
+                                  {consumosMiembro.slice(0, 2).map((mov) => (
+                                    <div
+                                      key={mov.id}
+                                      className="rounded-lg bg-[#12151e] border border-[#262b38] px-2.5 py-1 text-[11px] flex items-center justify-between text-zinc-300"
+                                    >
+                                      <span className="truncate">
+                                        {formatEspacioMedida(mov.medicamento_nombre)} (-
+                                        {mov.cantidad} {mov.unidad})
+                                      </span>
+                                      <span className="text-muted-foreground shrink-0 ml-2">
+                                        {new Date(mov.created_at).toLocaleDateString('es-AR', {
+                                          day: '2-digit',
+                                          month: '2-digit',
+                                        })}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ------------------------------------------------------------- */}
+            {/* SUBSECCIÓN 4.2: ESENCIALES                                    */}
+            {/* ------------------------------------------------------------- */}
+            {configSubTab === 'esenciales' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+                  <div className="flex items-center space-x-2.5">
+                    <Star className="h-4 w-4 text-primary" />
+                    <h2 className="text-sm font-bold text-foreground">Esenciales</h2>
+                    <span className="text-xs text-muted-foreground">
+                      ({kpis.esencialesCubiertos} de {kpis.esencialesTotal} cubiertos)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(state.familia || []).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleSyncEsencialesFamilia}
+                        className={`shrink-0 flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
+                        title="Adaptar catálogo según las fichas familiares"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-primary" />
+                        <span>Adaptar</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={openNewEsencialModal}
+                      className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
+                    >
+                      <span>+ Esencial</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-[#323846] bg-[#171a22] overflow-hidden">
+                  <table className="w-full table-fixed text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#2c313f] bg-[#12151c] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        <th className="w-[21%] py-2.5 pl-3.5 pr-2">Categoría</th>
+                        <th className="w-[17%] py-2.5 px-2">Principal Activo</th>
+                        <th className="w-[8%] py-2.5 px-1.5 text-center">Público</th>
+                        <th className="w-[24%] py-2.5 px-2">Síntomas</th>
+                        <th className="w-[18%] py-2.5 px-2">Marcas sugeridas</th>
+                        <th className="w-[12%] py-2.5 pl-2 pr-3.5 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#262b38] text-xs">
+                      {sortedEsenciales.map((esc) => {
+                        const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
+                          esc,
+                          state.medicamentos
+                        )
+                        return (
+                          <tr
+                            key={esc.id}
+                            className={`transition-colors hover:bg-[#1c202b] ${
+                              !esc.activo ? 'opacity-50' : ''
+                            }`}
+                          >
+                            {/* 1. Categoría */}
+                            <td className="py-2 pl-3.5 pr-2 align-middle">
+                              <span
+                                className={`inline-block rounded-xl px-2.5 py-1 text-xs font-semibold leading-snug break-words ${
+                                  cubierto
+                                    ? 'bg-zinc-700 text-white border border-zinc-400'
+                                    : 'bg-primary/15 border border-primary/40 text-primary'
+                                }`}
+                                title={
+                                  cubierto
+                                    ? `En stock: ${medicamentosQueCubren
+                                        .map((m) => m.nombre)
+                                        .join(', ')}`
+                                    : 'Sin stock disponible'
+                                }
+                              >
+                                {formatCategoriaEsencial(esc)}
+                              </span>
+                            </td>
+
+                            {/* 2. Principal Activo */}
+                            <td className="py-2 px-2 text-zinc-200 leading-snug break-words align-middle">
+                              {formatPrincipalActivoEsencial(esc)}
+                            </td>
+
+                            {/* 3. Público: Only emoji, 50% larger */}
+                            <td className="py-2 px-1.5 text-center align-middle">
+                              {esc.publico === 'pediatrico' ? (
+                                <span
+                                  className="inline-block text-lg leading-none select-none"
+                                  title="Bebé / Pediátrico"
+                                >
+                                  👶
+                                </span>
+                              ) : esc.publico === 'ambos' ? (
+                                <span
+                                  className="inline-block text-lg leading-none select-none"
+                                  title="Familia"
+                                >
+                                  👨‍👩‍👧
+                                </span>
+                              ) : (
+                                <span
+                                  className="inline-block text-lg leading-none select-none"
+                                  title="Adultos"
+                                >
+                                  🧑
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 4. Síntomas */}
+                            <td
+                              className="py-2 px-2 text-muted-foreground leading-snug break-words align-middle"
+                              title={esc.descripcion}
+                            >
+                              {formatSintomasEsencial(esc)}
+                            </td>
+
+                            {/* 5. Marcas sugeridas */}
+                            <td
+                              className="py-2 px-2 text-zinc-300 leading-snug break-words align-middle"
+                              title={formatMarcasSugeridas(esc)}
+                            >
+                              {formatMarcasSugeridas(esc)}
+                            </td>
+
+                            {/* 6. Acciones */}
+                            <td className="py-2 pl-2 pr-3.5 text-right align-middle">
+                              <div className="inline-flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    openNewMedModal({
+                                      nombre: esc.nombre,
+                                      droga: esc.droga_sugerida,
+                                      publico: esc.publico,
+                                      categoria: esc.categoria,
+                                      unidad: esc.unidad_sugerida,
+                                      cantidad_actual:
+                                        esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                      cantidad_inicial:
+                                        esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                      es_esencial: true,
+                                      esencial_id: esc.id,
+                                    })
+                                  }
+                                  className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  title="+ Stock"
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openEditEsencialModal(esc)}
+                                  className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  title="Editar"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
+                                  className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  title="Eliminar"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ------------------------------------------------------------- */}
+            {/* SUBSECCIÓN 4.3: ALERTAS                                       */}
+            {/* ------------------------------------------------------------- */}
+            {configSubTab === 'alertas' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
+                {/* Settings Form */}
+                <form
+                  onSubmit={handleSaveConfig}
+                  className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-5 space-y-3.5"
+                >
+                  <div className="space-y-3.5">
+                    <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
+                      <Bell className="h-4 w-4 text-primary" />
+                      <span>Alertas por Email</span>
+                    </h3>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2 space-y-1">
+                        <label className="text-xs font-medium text-foreground">
+                          Email destinatario de las alertas:
+                        </label>
+                        <input
+                          type="email"
+                          required
+                          value={configForm.email_alertas}
+                          onChange={(e) =>
+                            setConfigForm({ ...configForm, email_alertas: e.target.value })
+                          }
+                          className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-1.5 text-sm text-foreground"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-foreground">
+                          Anticipación (días):
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={configForm.dias_proximo_vencer}
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              dias_proximo_vencer: Number(e.target.value || 30),
+                            })
+                          }
+                          className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] px-3 py-1.5 text-sm text-foreground"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block">
+                        Alertas automáticas:
+                      </span>
+
+                      <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(configForm.alertar_proximo_vencer)}
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              alertar_proximo_vencer: e.target.checked,
+                            })
+                          }
+                          className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
+                        />
+                        <span>⏳ Producto próximo a vencer</span>
+                      </label>
+
+                      <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(
+                            configForm.alertar_vencido || configForm.alertar_sin_stock
+                          )}
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              alertar_vencido: e.target.checked,
+                              alertar_sin_stock: e.target.checked,
+                            })
+                          }
+                          className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
+                        />
+                        <span>🚨 Producto vencido / sin stock</span>
+                      </label>
+
+                      <label className="flex items-center space-x-3 text-sm text-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(configForm.alertar_esencial_faltante)}
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              alertar_esencial_faltante: e.target.checked,
+                            })
+                          }
+                          className="h-4 w-4 rounded border-[#343a48] accent-[#f87171]"
+                        />
+                        <span>⭐ Producto esencial faltante</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingConfig}
+                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold ${greyBtn}`}
+                  >
+                    {savingConfig ? 'Guardando...' : 'Guardar'}
+                  </button>
+                </form>
+
+                {/* Movements Log */}
+                <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-5 flex flex-col space-y-3.5">
+                  <h3 className="text-base font-bold text-foreground flex items-center space-x-2">
+                    <History className="h-4 w-4 text-primary" />
+                    <span>Últimos Movimientos</span>
+                  </h3>
+
+                  {state.movimientos.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-6 text-center">
+                      Todavía no hay movimientos registrados.
+                    </p>
+                  ) : (
+                    <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                      {state.movimientos.slice(0, 30).map((mov) => (
+                        <div
+                          key={mov.id}
+                          className="rounded-xl border border-[#2c313f] bg-[#0e1016] px-3 py-2.5 flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <div className="font-semibold text-foreground flex items-center flex-wrap gap-1.5">
+                              <span>{formatEspacioMedida(mov.medicamento_nombre)}</span>
+                              <span className="px-1.5 py-0.5 rounded text-[10px] uppercase bg-zinc-700 text-white font-semibold">
+                                {mov.tipo}
+                              </span>
+                            </div>
+                            <p className="text-muted-foreground mt-0.5">{mov.motivo}</p>
+                          </div>
+                          <div className="text-right text-muted-foreground shrink-0 ml-2">
+                            <div>
+                              {new Date(mov.created_at).toLocaleDateString('es-AR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
@@ -2393,30 +3359,159 @@ export default function BotiquinAppClient({
         </a>
 
         <a
-          href="/?tab=esenciales"
-          onClick={(e) => handleTabNavClick(e, 'esenciales')}
+          href="/?tab=historial"
+          onClick={(e) => handleTabNavClick(e, 'historial')}
           className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
-            activeTab === 'esenciales' ? 'text-primary' : 'text-muted-foreground'
+            activeTab === 'historial' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Star className="h-5 w-5 mb-0.5" />
-          <span>Esenciales</span>
+          <History className="h-5 w-5 mb-0.5" />
+          <span>Historial</span>
         </a>
 
         <a
-          href="/?tab=alertas"
-          onClick={(e) => handleTabNavClick(e, 'alertas')}
+          href="/?tab=configuracion"
+          onClick={(e) => handleTabNavClick(e, 'configuracion')}
           className={`relative flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
-            activeTab === 'alertas' ? 'text-primary' : 'text-muted-foreground'
+            activeTab === 'configuracion' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Bell className="h-5 w-5 mb-0.5" />
-          <span>Alertas</span>
+          <Settings className="h-5 w-5 mb-0.5" />
+          <span>Configuración</span>
         </a>
       </div>
 
       {/* ===================================================================== */}
-      {/* MODAL: ADD / EDIT MEDICAMENTO (COMPACT 3 TABS, NO VERTICAL SCROLL)    */}
+      {/* MODAL: ADD / EDIT INTEGRANTE DE LA FAMILIA                            */}
+      {/* ===================================================================== */}
+      {familiarModalOpen && (
+        <div
+          onClick={() => setFamiliarModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
+              <h3 className="text-base font-bold text-foreground">
+                {editingFamiliar ? 'Editar Integrante' : 'Nuevo Integrante de la Familia'}
+              </h3>
+              <button
+                onClick={() => setFamiliarModalOpen(false)}
+                className={`p-1.5 rounded-lg ${greyBtn}`}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveFamiliar} className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Nombre *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={familiarForm.nombre}
+                  onChange={(e) => setFamiliarForm({ ...familiarForm, nombre: e.target.value })}
+                  placeholder="Ej: Bauti, Lucía, Agustín"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
+                    Fecha de Nacimiento *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={familiarForm.fecha_nacimiento}
+                    onChange={(e) =>
+                      setFamiliarForm({ ...familiarForm, fecha_nacimiento: e.target.value })
+                    }
+                    className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                  />
+                  {familiarForm.fecha_nacimiento && (
+                    <span className="text-[11px] text-primary mt-0.5 block">
+                      Edad calculada:{' '}
+                      {calcularEdadDesdeFecha(familiarForm.fecha_nacimiento).texto}
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-zinc-200 block mb-1">
+                    Peso (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="300"
+                    value={familiarForm.peso_kg}
+                    onChange={(e) => setFamiliarForm({ ...familiarForm, peso_kg: e.target.value })}
+                    placeholder="Ej: 10.5 o 74"
+                    className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Antecedentes médicos / Alergias
+                </label>
+                <input
+                  type="text"
+                  value={familiarForm.antecedentes_medicos}
+                  onChange={(e) =>
+                    setFamiliarForm({ ...familiarForm, antecedentes_medicos: e.target.value })
+                  }
+                  placeholder="Ej: Alergia a penicilina, asma leve, gastritis, ninguno"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Dolores o síntomas recurrentes
+                </label>
+                <input
+                  type="text"
+                  value={familiarForm.dolores_recurrentes}
+                  onChange={(e) =>
+                    setFamiliarForm({ ...familiarForm, dolores_recurrentes: e.target.value })
+                  }
+                  placeholder="Ej: Migrañas, dolor lumbar, acidez, otitis, cólicos"
+                  className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-3 border-t border-[#383f4e]">
+                <button
+                  type="button"
+                  onClick={() => setFamiliarModalOpen(false)}
+                  className={`rounded-xl px-4 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingFamiliar}
+                  className={`rounded-xl px-4 py-1.5 text-xs font-semibold ${greyBtnActive}`}
+                >
+                  {savingFamiliar ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: ADD / EDIT MEDICAMENTO (COMPACT 3 TABS, MANUAL PHOTO ANALYZE)  */}
       {/* ===================================================================== */}
       {medModalOpen && (
         <div
@@ -2427,12 +3522,12 @@ export default function BotiquinAppClient({
             onClick={(e) => e.stopPropagation()}
             className="w-full max-w-lg rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
-            <div className="flex items-center justify-between pb-2.5 border-b border-[#383f4e]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h2 className="text-base font-bold text-foreground">
-                {editingMed ? 'Editar Medicamento' : 'Nuevo Medicamento'}
+                {editingMed ? 'Editar Medicamento' : 'Cargar Medicamento'}
               </h2>
               <button
-                type="button"
                 onClick={() => setMedModalOpen(false)}
                 className={`p-1.5 rounded-lg ${greyBtn}`}
               >
@@ -2440,21 +3535,21 @@ export default function BotiquinAppClient({
               </button>
             </div>
 
-            {/* 3 Section Tabs: General | Stock | Uso */}
-            <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#14171f] p-1 border border-[#363c4b]">
+            {/* 3 Compact Tabs */}
+            <div className="grid grid-cols-3 gap-1.5 bg-[#161922] p-1 rounded-xl mt-3 border border-[#323846]">
               {[
-                { id: 'general', label: 'General' },
-                { id: 'stock', label: 'Stock' },
-                { id: 'uso', label: 'Uso' },
+                { id: 'general', label: '1. General' },
+                { id: 'stock', label: '2. Stock' },
+                { id: 'uso', label: '3. Uso' },
               ].map((t) => (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => setMedModalTab(t.id as MedModalTab)}
-                  className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors ${
+                  className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors ${
                     medModalTab === t.id
-                      ? greyBtnActive
-                      : 'text-zinc-400 hover:text-zinc-100'
+                      ? 'bg-zinc-700 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   {t.label}
@@ -2463,36 +3558,36 @@ export default function BotiquinAppClient({
             </div>
 
             <form onSubmit={handleSaveMedicamento} className="mt-3.5">
-              {/* TAB 1: GENERAL (Compact single-row photo bar + tight grid) */}
+              {/* TAB 1: GENERAL */}
               {medModalTab === 'general' && (
                 <div className="space-y-3">
-                  {/* Ultra-compact Photo & AI Bar */}
-                  <div className="rounded-xl border border-[#383f4e] bg-[#161922] px-3 py-2 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                  {/* Compact Photo Bar: take multiple photos first, then press Analizar */}
+                  <div className="rounded-xl border border-[#383f4e] bg-[#161922] p-2.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs font-medium text-zinc-300 shrink-0">
-                          Fotos ({medForm.fotos_input.length})
-                        </span>
-
-                        {medForm.fotos_input.length > 0 && (
-                          <div className="flex items-center gap-1.5 overflow-x-auto">
-                            {medForm.fotos_input.map((imgSrc, idx) => (
+                        {medForm.fotos_input.length === 0 ? (
+                          <span className="text-xs text-muted-foreground truncate">
+                            Sacá todas las fotos que quieras y luego tocá Analizar
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+                            {medForm.fotos_input.map((foto, idx) => (
                               <div
                                 key={idx}
-                                className="relative h-8 w-8 shrink-0 rounded-md overflow-hidden border border-[#383f4e] bg-[#0e1016]"
+                                className="relative h-9 w-9 shrink-0 rounded-lg overflow-hidden border border-[#4a5264] bg-black"
                               >
                                 <img
-                                  src={imgSrc}
+                                  src={foto}
                                   alt={`Foto ${idx + 1}`}
                                   className="h-full w-full object-cover"
                                 />
                                 <button
                                   type="button"
                                   onClick={() => handleRemovePhotoAtIndex(idx)}
-                                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 hover:opacity-100 text-white transition-opacity"
+                                  className="absolute top-0 right-0 bg-black/80 text-red-300 p-0.5"
                                   title="Quitar"
                                 >
-                                  <X className="h-3 w-3" />
+                                  <X className="h-2.5 w-2.5" />
                                 </button>
                               </div>
                             ))}
@@ -2543,7 +3638,7 @@ export default function BotiquinAppClient({
                             type="button"
                             onClick={() => analyzePhotosWithAI()}
                             disabled={analyzingPhoto}
-                            className={`flex items-center space-x-1 rounded-lg px-2.5 py-1 text-xs font-medium ${greyBtn}`}
+                            className="flex items-center space-x-1 rounded-lg bg-primary/15 border border-primary/40 text-primary hover:bg-primary/25 px-2.5 py-1 text-xs font-semibold transition-colors"
                           >
                             {analyzingPhoto ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -2559,7 +3654,7 @@ export default function BotiquinAppClient({
                     {analyzingPhoto && (
                       <div className="flex items-center space-x-1.5 text-[11px] text-red-300">
                         <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                        <span>Analizando con IA...</span>
+                        <span>Analizando las fotos con IA...</span>
                       </div>
                     )}
 
@@ -2760,7 +3855,7 @@ export default function BotiquinAppClient({
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs font-medium text-zinc-200 block mb-1">
-                      Para qué sirve (solo síntomas resumidos)
+                      Función (síntomas que trata)
                     </label>
                     <input
                       type="text"
@@ -2773,7 +3868,7 @@ export default function BotiquinAppClient({
 
                   <div>
                     <label className="text-xs font-medium text-zinc-200 block mb-1">
-                      Dosis recomendada
+                      Dosis
                     </label>
                     <input
                       type="text"
@@ -2825,7 +3920,7 @@ export default function BotiquinAppClient({
                 </div>
               )}
 
-              {/* Modal Footer (1 word & grey) */}
+              {/* Modal Footer */}
               <div className="flex items-center justify-end space-x-2.5 pt-4 mt-4 border-t border-[#383f4e]">
                 <button
                   type="button"
@@ -2849,7 +3944,7 @@ export default function BotiquinAppClient({
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL: DESCONTAR DOSIS USADA                                          */}
+      {/* MODAL: DESCONTAR DOSIS USADA (WITH FAMILY MEMBER SELECTOR)            */}
       {/* ===================================================================== */}
       {dosisModalMed && (
         <div
@@ -2862,7 +3957,7 @@ export default function BotiquinAppClient({
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
-                Usar • {dosisModalMed.nombre}
+                Usar • {formatEspacioMedida(dosisModalMed.nombre)}
               </h3>
               <button
                 onClick={() => setDosisModalMed(null)}
@@ -2879,6 +3974,41 @@ export default function BotiquinAppClient({
                   {dosisModalMed.cantidad_actual} {dosisModalMed.unidad}
                 </strong>
               </div>
+
+              {(state.familia || []).length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-zinc-200 block mb-1.5">
+                    ¿Para quién fue la dosis?
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(state.familia || []).map((f) => {
+                      const ed = calcularEdadDesdeFecha(f.fecha_nacimiento)
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setDosisFamiliarId(f.id)}
+                          className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                            dosisFamiliarId === f.id ? greyBtnActive : greyBtn
+                          }`}
+                        >
+                          <span>{ed.esPediatrico ? '👶' : '🧑'}</span>
+                          <span>{f.nombre}</span>
+                        </button>
+                      )
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setDosisFamiliarId('')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium ${
+                        dosisFamiliarId === '' ? greyBtnActive : greyBtn
+                      }`}
+                    >
+                      Otro
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-medium text-zinc-200 block mb-2">
@@ -2917,7 +4047,7 @@ export default function BotiquinAppClient({
 
               <div>
                 <label className="text-xs font-medium text-zinc-200 block mb-1">
-                  Nota (opcional):
+                  Motivo / Síntoma (opcional):
                 </label>
                 <input
                   type="text"
@@ -2963,7 +4093,7 @@ export default function BotiquinAppClient({
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
-                Reponer • {reponerModalMed.nombre}
+                Reponer • {formatEspacioMedida(reponerModalMed.nombre)}
               </h3>
               <button
                 onClick={() => setReponerModalMed(null)}
@@ -3036,7 +4166,7 @@ export default function BotiquinAppClient({
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-red-300">
-                Dar de Baja • {bajaModalMed.nombre}
+                Dar de Baja • {formatEspacioMedida(bajaModalMed.nombre)}
               </h3>
               <button
                 onClick={() => setBajaModalMed(null)}
@@ -3156,7 +4286,7 @@ export default function BotiquinAppClient({
                     onChange={(e) =>
                       setEsencialForm({ ...esencialForm, droga_sugerida: e.target.value })
                     }
-                    placeholder="Ej: Paracetamol, Ibuprofeno, Loratadina..."
+                    placeholder="Ej: Paracetamol, Ibuprofeno, Omeprazol"
                     className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-2 text-sm text-foreground"
                   />
                 </div>
@@ -3286,7 +4416,9 @@ export default function BotiquinAppClient({
                     key={idx}
                     onClick={() => setLightboxIndex(idx)}
                     className={`h-14 w-14 rounded-lg overflow-hidden border-2 transition-all ${
-                      idx === lightboxIndex ? 'border-primary scale-105' : 'border-transparent opacity-60'
+                      idx === lightboxIndex
+                        ? 'border-primary scale-105'
+                        : 'border-transparent opacity-60'
                     }`}
                   >
                     <img src={p} alt="" className="h-full w-full object-cover" />

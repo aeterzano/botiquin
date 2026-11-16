@@ -61,6 +61,56 @@ export interface MovimientoStock {
   unidad: string
   motivo: string
   usuario_email: string
+  familiar_id?: string | null
+  familiar_nombre?: string | null
+  created_at: string
+}
+
+export interface MiembroFamilia {
+  id: string
+  nombre: string
+  fecha_nacimiento: string // YYYY-MM-DD
+  peso_kg: number | null
+  antecedentes_medicos: string
+  dolores_recurrentes: string
+  alergias?: string
+  medicacion_habitual?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConsultaHistorialItem {
+  id: string
+  familiar_id: string | null // ID de MiembroFamilia o 'otro'
+  paciente_nombre: string
+  paciente_publico: PublicoObjetivo
+  edad_texto: string
+  peso_kg: number | null
+  consulta: string
+  respuesta_markdown: string
+  aiData?: {
+    en_stock_utilizable: boolean
+    recomendados_del_stock: {
+      id: string
+      nombre: string
+      droga: string
+      cantidad_actual: number
+      unidad: string
+      dosis_sugerida: string
+      cantidad_descontar_sugerida: number
+      motivo: string
+    }[]
+    advertencias_stock: string[]
+    sugerencias_compra: {
+      nombre_sugerido: string
+      droga: string
+      publico: string
+      motivo: string
+      presentacion_sugerida: string
+    }[]
+    pautas_alarma: string[]
+    nivel_urgencia: 'baja' | 'media' | 'alta'
+  }
   created_at: string
 }
 
@@ -103,6 +153,8 @@ export interface BotiquinState {
   movimientos: MovimientoStock[]
   config: BotiquinConfig
   alertas_log: AlertaLog[]
+  familia: MiembroFamilia[]
+  consultas_historial: ConsultaHistorialItem[]
 }
 
 export const CATEGORIAS_MEDICAMENTOS = [
@@ -119,6 +171,248 @@ export const CATEGORIAS_MEDICAMENTOS = [
   'Vitaminas / Suplementos',
   'Otro',
 ]
+
+export function calcularEdadDesdeFecha(fechaNacimiento: string | null | undefined): {
+  anios: number
+  meses: number
+  totalMeses: number
+  texto: string
+  esPediatrico: boolean
+} {
+  if (!fechaNacimiento) {
+    return { anios: 30, meses: 0, totalMeses: 360, texto: 'Sin fecha', esPediatrico: false }
+  }
+  const parts = fechaNacimiento.split('-').map(Number)
+  if (parts.length !== 3 || parts.some(isNaN)) {
+    return { anios: 30, meses: 0, totalMeses: 360, texto: 'Sin fecha', esPediatrico: false }
+  }
+
+  const now = new Date()
+  let years = now.getFullYear() - parts[0]
+  let months = now.getMonth() + 1 - parts[1]
+  const days = now.getDate() - parts[2]
+
+  if (days < 0) {
+    months -= 1
+  }
+  if (months < 0) {
+    years -= 1
+    months += 12
+  }
+
+  if (years < 0) {
+    return { anios: 0, meses: 0, totalMeses: 0, texto: 'Recién nacido', esPediatrico: true }
+  }
+
+  const totalMeses = years * 12 + months
+  const esPediatrico = years < 15
+
+  let texto = ''
+  if (years === 0) {
+    texto = `${months} ${months === 1 ? 'mes' : 'meses'}`
+  } else if (years < 2 && months > 0) {
+    texto = `${years} año y ${months} ${months === 1 ? 'mes' : 'meses'}`
+  } else {
+    texto = `${years} ${years === 1 ? 'año' : 'años'}`
+  }
+
+  return { anios: years, meses: months, totalMeses, texto, esPediatrico }
+}
+
+export function generarEsencialesSegunFamilia(
+  familia: MiembroFamilia[],
+  esencialesActuales: ProductoEsencial[]
+): { nuevos: ProductoEsencial[]; listaActualizada: ProductoEsencial[] } {
+  const lista = [...esencialesActuales]
+  const nuevos: ProductoEsencial[] = []
+  const nowIso = new Date().toISOString()
+
+  const addIfNotExists = (candidato: Omit<ProductoEsencial, 'created_at' | 'activo'>) => {
+    const yaExiste = lista.some(
+      (e) =>
+        e.id === candidato.id ||
+        e.nombre.toLowerCase() === candidato.nombre.toLowerCase() ||
+        (e.publico === candidato.publico &&
+          candidato.keywords.some((kw) =>
+            e.keywords.map((k) => k.toLowerCase()).includes(kw.toLowerCase())
+          ) &&
+          e.categoria === candidato.categoria)
+    )
+    if (!yaExiste) {
+      const nuevoItem: ProductoEsencial = {
+        ...candidato,
+        activo: true,
+        created_at: nowIso,
+      }
+      lista.push(nuevoItem)
+      nuevos.push(nuevoItem)
+    }
+  }
+
+  for (const miembro of familia) {
+    const edad = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
+    const publicoMiembro: PublicoObjetivo = edad.esPediatrico ? 'pediatrico' : 'adulto'
+    const textoClinico = `${miembro.antecedentes_medicos || ''} ${miembro.dolores_recurrentes || ''} ${
+      miembro.alergias || ''
+    }`
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+
+    // Reglas por edad pediátrica / lactante
+    if (edad.totalMeses <= 36) {
+      addIfNotExists({
+        id: 'esc-fam-solucion-fisiologica',
+        nombre: 'Solución Fisiológica (Lavajes nasales / Nebulizar)',
+        droga_sugerida: 'Cloruro de Sodio 0.9%',
+        publico: 'pediatrico',
+        categoria: 'Resfrío / Tos / Vías Respiratorias',
+        stock_minimo_sugerido: 1,
+        unidad_sugerida: 'ml',
+        keywords: ['solucion fisiologica', 'cloruro de sodio', 'fisiologica', 'hypersol'],
+        descripcion: `Congestión nasal, mocos y nebulizaciones (${miembro.nombre}).`,
+      })
+    }
+
+    // Dolores recurrentes / antecedentes específicos
+    if (/(migrana|jaqueca|cefalea|dolor de cabeza)/.test(textoClinico)) {
+      addIfNotExists({
+        id: `esc-fam-migrana-${publicoMiembro}`,
+        nombre:
+          publicoMiembro === 'adulto'
+            ? 'Analgésico / Antimigrañoso Fuerte'
+            : 'Analgésico Cefalea Pediátrico',
+        droga_sugerida:
+          publicoMiembro === 'adulto'
+            ? 'Ibuprofeno 600mg / Naproxeno / Paracetamol 1g'
+            : 'Ibuprofeno 4% / Paracetamol',
+        publico: publicoMiembro,
+        categoria: 'Analgésico / Antifebril',
+        stock_minimo_sugerido: 4,
+        unidad_sugerida: publicoMiembro === 'adulto' ? 'comprimidos' : 'ml',
+        keywords: ['migral', 'tetralgin', 'naproxeno', 'ibuprofeno 600', 'actron 600', 'tafirol 1g'],
+        descripcion: `Dolor de cabeza intenso o migrañas recurrentes (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(espalda|lumbar|cervical|contractura|ciatico|muscular|cuello)/.test(textoClinico)) {
+      addIfNotExists({
+        id: 'esc-fam-contractura-muscular',
+        nombre: 'Descontracturante / Miorelajante',
+        droga_sugerida: 'Diclofenac + Pridinol / Ibuprofeno + Clorzoxazona',
+        publico: 'adulto',
+        categoria: 'Antiinflamatorio / Muscular',
+        stock_minimo_sugerido: 4,
+        unidad_sugerida: 'comprimidos',
+        keywords: ['oxagesic', 'blokium flex', 'pridinol', 'clorzoxazona', 'ibupirac flex', 'atomo'],
+        descripcion: `Contracturas, dolor lumbar, cervical o muscular recurrente (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(acidez|gastritis|reflujo|estomago|ardor|ulcera|indigestion)/.test(textoClinico)) {
+      addIfNotExists({
+        id: `esc-fam-protector-gastrico-${publicoMiembro}`,
+        nombre: 'Antiácido / Protector Gástrico',
+        droga_sugerida: 'Omeprazol / Esomeprazol / Hidróxido de Aluminio y Magnesio',
+        publico: publicoMiembro,
+        categoria: 'Digestivo / Antiácido / Antiespasmódico',
+        stock_minimo_sugerido: 4,
+        unidad_sugerida: 'comprimidos',
+        keywords: ['omeprazol', 'esomeprazol', 'mylanta', 'rennie', 'alikal', 'uvasal', 'pantoprazol'],
+        descripcion: `Acidez, gastritis o malestar estomacal recurrente (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(colico|panza|abdominal|menstrual|gases|meteorismo)/.test(textoClinico)) {
+      if (edad.esPediatrico) {
+        addIfNotExists({
+          id: 'esc-fam-simeticona-pediatrico',
+          nombre: 'Antiflatulento / Cólicos (Gotas)',
+          droga_sugerida: 'Simeticona',
+          publico: 'pediatrico',
+          categoria: 'Digestivo / Antiácido / Antiespasmódico',
+          stock_minimo_sugerido: 1,
+          unidad_sugerida: 'gotas',
+          keywords: ['factor ag', 'simeticona', 'mylicon', 'colicos'],
+          descripcion: `Gases y cólicos abdominales (${miembro.nombre}).`,
+        })
+      } else {
+        addIfNotExists({
+          id: 'esc-fam-antiespasmodico-adulto',
+          nombre: 'Antiespasmódico Abdominal',
+          droga_sugerida: 'Hioscina (Buscapina) / Propinox (Sertal)',
+          publico: 'adulto',
+          categoria: 'Digestivo / Antiácido / Antiespasmódico',
+          stock_minimo_sugerido: 4,
+          unidad_sugerida: 'comprimidos',
+          keywords: ['buscapina', 'sertal', 'hioscina', 'propinox'],
+          descripcion: `Dolor de panza, cólicos o espasmos (${miembro.nombre}).`,
+        })
+      }
+    }
+
+    if (/(asma|broncoespasmo|bronquiolitis|sibilancia|ahogo|tos)/.test(textoClinico)) {
+      addIfNotExists({
+        id: `esc-fam-broncodilatador-${publicoMiembro}`,
+        nombre: 'Broncodilatador / Rescate Respiratorio',
+        droga_sugerida: 'Salbutamol / Budesonide',
+        publico: publicoMiembro,
+        categoria: 'Resfrío / Tos / Vías Respiratorias',
+        stock_minimo_sugerido: 1,
+        unidad_sugerida: 'disparos',
+        keywords: ['salbutamol', 'ventolin', 'budesonide', 'neumotex', 'paf'],
+        descripcion: `Antecedentes de broncoespasmo, asma o tos obstructiva (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(otitis|oido)/.test(textoClinico)) {
+      addIfNotExists({
+        id: `esc-fam-otico-${publicoMiembro}`,
+        nombre: 'Gotas Óticas (Dolor / Inflamación de Oído)',
+        droga_sugerida: 'Ciprofloxacina + Hidrocortisona / Antipirina + Benzocaína',
+        publico: publicoMiembro,
+        categoria: 'Otro',
+        stock_minimo_sugerido: 1,
+        unidad_sugerida: 'gotas',
+        keywords: ['otic', 'otex', 'valmax', 'ciriax otic', 'sincerum', 'oido'],
+        descripcion: `Dolor de oído u otitis recurrente (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(rinitis|alergia|urticaria|dermatitis|picazon|atopia)/.test(textoClinico)) {
+      addIfNotExists({
+        id: `esc-fam-alergia-especifica-${publicoMiembro}`,
+        nombre:
+          publicoMiembro === 'pediatrico'
+            ? 'Antialérgico Jarabe / Gotas Pediátrico'
+            : 'Antihistamínico de 2da Generación (Sin sueño)',
+        droga_sugerida: 'Desloratadina / Cetirizina / Loratadina',
+        publico: publicoMiembro,
+        categoria: 'Antialérgico / Antihistamínico',
+        stock_minimo_sugerido: 1,
+        unidad_sugerida: publicoMiembro === 'pediatrico' ? 'ml' : 'comprimidos',
+        keywords: ['aerius', 'alerpriv', 'cetirizina', 'desloratadina', 'loratadina', 'hexaler'],
+        descripcion: `Alergias, rinitis o brotes cutáneos (${miembro.nombre}).`,
+      })
+    }
+
+    if (/(garganta|faringitis|angina|disfonia)/.test(textoClinico) && !edad.esPediatrico) {
+      addIfNotExists({
+        id: 'esc-fam-antiseptico-faringeo',
+        nombre: 'Caramelos / Spray Antiséptico y Analgésico de Garganta',
+        droga_sugerida: 'Bencidamina / Benzocaína / Gramicidina',
+        publico: 'adulto',
+        categoria: 'Resfrío / Tos / Vías Respiratorias',
+        stock_minimo_sugerido: 4,
+        unidad_sugerida: 'comprimidos',
+        keywords: ['strepsils', 'atenol', 'anginovag', 'biocord', 'refrianex', 'garganta'],
+        descripcion: `Dolor de garganta o faringitis recurrente (${miembro.nombre}).`,
+      })
+    }
+  }
+
+  return { nuevos, listaActualizada: lista }
+}
 
 export function calcularDiasVencimiento(fechaVencimiento: string | null): number | null {
   if (!fechaVencimiento) return null

@@ -1,8 +1,12 @@
 import {
   calcularDiasVencimiento,
+  calcularEdadDesdeFecha,
   CATEGORIAS_MEDICAMENTOS,
+  ConsultaHistorialItem,
   esMedicamentoVencido,
   Medicamento,
+  MiembroFamilia,
+  MovimientoStock,
   PublicoObjetivo,
   UnidadMedida,
 } from './botiquin-types'
@@ -146,25 +150,24 @@ Devolvé EXCLUSIVAMENTE un objeto JSON válido con la siguiente estructura exact
 {
   "nombre": "Nombre comercial si es visible en las fotos (ej: 'Ibupirac 4% Suspensión', 'Tafirol 1g'). Si no se ve ningún nombre en la foto, devolver ''",
   "droga": "Principio activo / droga genérica (ej: 'Ibuprofeno', 'Paracetamol'). Si no se ve ni se puede deducir del nombre comercial visible, devolver ''",
-  "concentracion": "Concentración o gramaje si se ve en la foto (ej: '4g / 100ml', '1000 mg', '400 mg'). Si no se ve, devolver ''",
+  "concentracion": "Concentración o gramaje si se ve en la foto (ej: '4 g / 100 ml', '1000 mg', '400 mg'). Si no se ve, devolver ''",
   "publico": "Elegí uno entre: 'adulto', 'pediatrico', 'ambos' (si dice pediátrico, niños, lactantes, gotas pediátricas o suspensión infantil elegí 'pediatrico')",
   "categoria": "Elegí la categoría más adecuada entre: ${CATEGORIAS_MEDICAMENTOS.map((c) => `'${c}'`).join(', ')}",
   "unidad": "Elegí una unidad entre: 'comprimidos', 'ml', 'gotas', 'sobres', 'ampollas', 'g', 'disparos', 'unidades'",
-  "cantidad_inicial": 10, // Número con el contenido total del envase si se lee en la caja (ej. 10 comprimidos, 90 ml, 20 ml). Si NO se ve en ninguna foto, devolver null.
-  "fecha_vencimiento": null, // SOLO si la fecha de vencimiento (VTO / EXP / Vence) es visible en alguna de las fotos, devolver en formato "YYYY-MM-DD" (si dice MM/YYYY usar el último día de ese mes, ej "2027-08-31"). Si NO se ve la fecha de vencimiento en las fotos, devolver SIEMPRE null.
+  "cantidad_inicial": 10,
+  "fecha_vencimiento": null,
   "para_que_sirve": "Lista hiper resumida únicamente con los síntomas que trata separados por coma (ej: 'Fiebre, dolor de cabeza, dolores musculares' o 'Náuseas, vómitos'). Máximo 5 a 8 palabras, sin verbos ni oraciones largas.",
   "posologia_referencia": "Dosis habitual orientativa según prospecto para su público objetivo.",
   "notas": "Advertencias importantes (ej: 'Conservar en heladera una vez abierto', 'Agitar antes de usar').",
-  "campos_detectados": ["nombre", "droga", "concentracion", "publico", "unidad", "para_que_sirve", "posologia_referencia"], // Lista de nombres de campos que SÍ pudiste completar a partir de las fotos
+  "campos_detectados": ["nombre", "droga", "concentracion", "publico", "unidad", "para_que_sirve", "posologia_referencia"],
   "campos_faltantes": [
-    // Lista de campos importantes que NO se ven en las fotos y el usuario debe completar manualmente (ej: fecha_vencimiento, cantidad_actual, cantidad_inicial, concentracion, nombre, droga)
     {
       "campo": "fecha_vencimiento",
       "etiqueta": "Fecha de Vencimiento",
       "motivo": "No se llega a ver la solapa o sello de vencimiento en las fotos subidas"
     }
   ],
-  "mensaje_hibrido": "Resumen breve para el usuario (ej: 'Se detectó Ibupirac 4% (Ibuprofeno Pediátrico). Por favor completá manualmente la fecha de vencimiento y confirmá cuánta cantidad te queda disponible.')"
+  "mensaje_hibrido": "Resumen breve para el usuario."
 }
 `
 
@@ -190,7 +193,6 @@ Devolvé EXCLUSIVAMENTE un objeto JSON válido con la siguiente estructura exact
     ? parsed.campos_faltantes
     : []
 
-  // Ensure key missing fields are always flagged in campos_faltantes for the hybrid UI
   const ensureMissing = (campo: string, etiqueta: string, motivo: string) => {
     if (!camposFaltantes.some((f) => f.campo === campo)) {
       camposFaltantes.push({ campo, etiqueta, motivo })
@@ -220,7 +222,6 @@ Devolvé EXCLUSIVAMENTE un objeto JSON válido con la siguiente estructura exact
       'No se distingue la cantidad de unidades/ml en la foto; ingresá cuánto tenés disponible.'
     )
   } else {
-    // Even if total box content was read, remind user to verify actual remaining stock if box is already opened
     ensureMissing(
       'cantidad_actual',
       'Cantidad Disponible Actual',
@@ -275,8 +276,22 @@ export async function consultBotiquinAI(params: {
   edadPesoDetalle?: string
   medicamentos: Medicamento[]
   historial?: { role: 'user' | 'assistant'; content: string }[]
+  familiarSeleccionado?: MiembroFamilia | null
+  familiaCompleta?: MiembroFamilia[]
+  consultasPreviasPaciente?: ConsultaHistorialItem[]
+  consumosPreviosPaciente?: MovimientoStock[]
 }): Promise<ConsultaAIResponse> {
-  const { consulta, pacienteTipo, edadPesoDetalle, medicamentos, historial = [] } = params
+  const {
+    consulta,
+    pacienteTipo,
+    edadPesoDetalle,
+    medicamentos,
+    historial = [],
+    familiarSeleccionado = null,
+    familiaCompleta = [],
+    consultasPreviasPaciente = [],
+    consumosPreviosPaciente = [],
+  } = params
 
   const activos = medicamentos.filter((m) => m.estado === 'activo')
 
@@ -316,26 +331,96 @@ export async function consultBotiquinAI(params: {
           .slice(-6)
           .map((h) => `${h.role === 'user' ? 'Usuario' : 'Asistente'}: ${h.content}`)
           .join('\n')
-      : 'Sin mensajes previos.'
+      : 'Sin mensajes previos en esta sesión.'
+
+  let fichaPacienteTexto = ''
+  if (familiarSeleccionado) {
+    const edadInfo = calcularEdadDesdeFecha(familiarSeleccionado.fecha_nacimiento)
+    fichaPacienteTexto = `
+FICHA MÉDICA DEL INTEGRANTE DE LA FAMILIA SELECCIONADO:
+- Nombre: ${familiarSeleccionado.nombre}
+- Fecha de nacimiento: ${familiarSeleccionado.fecha_nacimiento} (Edad calculada hoy: ${edadInfo.texto} - Perfil: ${
+      edadInfo.esPediatrico ? 'PEDIÁTRICO / NIÑO' : 'ADULTO'
+    })
+- Peso actual: ${familiarSeleccionado.peso_kg ? `${familiarSeleccionado.peso_kg} kg` : 'No registrado'}
+- Antecedentes médicos / Alergias: ${
+      familiarSeleccionado.antecedentes_medicos || familiarSeleccionado.alergias || 'Sin antecedentes registrados'
+    }
+- Dolores o síntomas recurrentes: ${
+      familiarSeleccionado.dolores_recurrentes || 'Sin dolores recurrentes registrados'
+    }
+`
+  } else {
+    fichaPacienteTexto = `
+PACIENTE EN LA CONSULTA (Otro / Visitante):
+- Tipo: ${
+      pacienteTipo === 'pediatrico'
+        ? 'Bebé / Niño (Pediátrico)'
+        : pacienteTipo === 'adulto'
+        ? 'Adulto'
+        : 'Detectar automáticamente según la consulta'
+    }
+- Datos adicionales (edad/peso/contexto): ${edadPesoDetalle || 'No especificado'}
+`
+  }
+
+  const consultasAnterioresTexto =
+    consultasPreviasPaciente.length > 0
+      ? consultasPreviasPaciente
+          .slice(0, 8)
+          .map(
+            (c) =>
+              `- [${new Date(c.created_at).toLocaleDateString('es-AR')}] Consulta: "${
+                c.consulta
+              }" -> Respuesta previa: ${c.respuesta_markdown.slice(0, 220)}...`
+          )
+          .join('\n')
+      : 'No hay consultas anteriores registradas para este paciente.'
+
+  const consumosAnterioresTexto =
+    consumosPreviosPaciente.length > 0
+      ? consumosPreviosPaciente
+          .slice(0, 10)
+          .map(
+            (mov) =>
+              `- [${new Date(mov.created_at).toLocaleDateString('es-AR')}] ${mov.medicamento_nombre} (-${
+                mov.cantidad
+              } ${mov.unidad}): ${mov.motivo}`
+          )
+          .join('\n')
+      : 'No hay consumos previos registrados para este paciente.'
+
+  const resumenGrupoFamiliar =
+    familiaCompleta.length > 0
+      ? familiaCompleta
+          .map((f) => {
+            const ed = calcularEdadDesdeFecha(f.fecha_nacimiento)
+            return `${f.nombre} (${ed.texto}, ${f.peso_kg ? `${f.peso_kg}kg` : 's/peso'}, Antecedentes: ${
+              f.antecedentes_medicos || 'ninguno'
+            }, Dolores frecuentes: ${f.dolores_recurrentes || 'ninguno'})`
+          })
+          .join(' | ')
+      : 'Sin integrantes cargados.'
 
   const prompt = `
-Sos el Asistente Médico y Farmacéutico Inteligente del "Botiquín Virtual Familiar" (en español rioplatense/Argentina).
-Tu objetivo es responder consultas del usuario sobre malestares o síntomas (ej: "me duele la espalda, de mi stock ¿qué puedo tomar?" o "el bebé no para de vomitar, ¿qué le doy?") basándote ESTRICTAMENTE primero en su STOCK ACTUAL y diferenciando rigurosamente entre medicamentos de ADULTOS y PEDIÁTRICOS.
+Sos el "Dr. Botiquín IA", el Asistente Médico y Farmacéutico Inteligente del "Botiquín Virtual Familiar" (en español rioplatense/Argentina).
+Tu objetivo es responder consultas del usuario sobre malestares o síntomas basándote ESTRICTAMENTE primero en su STOCK ACTUAL, diferenciando rigurosamente entre medicamentos de ADULTOS y PEDIÁTRICOS, y personalizando al 100% la respuesta según la ficha médica del paciente seleccionado, su edad calculada, su peso, sus antecedentes médicos, sus dolores recurrentes, su historial de consultas previas y sus consumos de medicamentos.
 
-DATOS DEL PACIENTE EN LA CONSULTA:
-- Filtro de paciente seleccionado: ${
-    pacienteTipo === 'pediatrico'
-      ? 'Bebé / Niño (Pediátrico)'
-      : pacienteTipo === 'adulto'
-      ? 'Adulto'
-      : 'Detectar automáticamente según la consulta'
-  }
-- Datos adicionales (edad/peso/contexto): ${edadPesoDetalle || 'No especificado'}
+${fichaPacienteTexto}
+
+HISTORIAL DE CONSULTAS PREVIAS DE ESTE PACIENTE (Recordalas para dar seguimiento y personalizar al 100%):
+${consultasAnterioresTexto}
+
+HISTORIAL DE CONSUMOS DE MEDICAMENTOS DE ESTE PACIENTE EN EL BOTIQUÍN:
+${consumosAnterioresTexto}
+
+GRUPO FAMILIAR COMPLETO REGISTRADO:
+${resumenGrupoFamiliar}
 
 CONSULTA ACTUAL DEL USUARIO:
 "${consulta}"
 
-HISTORIAL RECIENTE DE CONVERSACIÓN:
+CONVERSACIÓN EN CURSO:
 ${historialTexto}
 
 =================================================================
@@ -347,19 +432,19 @@ ${JSON.stringify(noDisponiblesOVencidos, null, 2)}
 =================================================================
 
 REGLAS CRÍTICAS DE RESPUESTA:
-1. SEGURIDAD PEDIÁTRICA vs ADULTO:
+1. PERSONALIZACIÓN Y SEGURIDAD PEDIÁTRICA vs ADULTO:
+   - Dirigite al paciente por su nombre si es un miembro de la familia seleccionado, teniendo en cuenta su edad exacta, peso, antecedentes médicos (ej. alergias o contraindicaciones) y dolores recurrentes, así como sus consultas y consumos anteriores.
    - NUNCA recomiendes un medicamento de uso exclusivo de adultos para un bebé o niño.
-   - Si la consulta es por un bebé o niño (ej. "el bebé no para de vomitar", "el nene tiene fiebre"), solo considerá del stock los que tengan publico="pediatrico" o publico="ambos" y sean seguros para su edad. En vómitos de bebés, recordá que la hidratación fraccionada (Sales de Rehidratación Oral / lactancia) y la consulta pediátrica son prioritarias, y advertí precaución con antieméticos si no fueron indicados por su pediatra con dosis según peso.
+   - Si el paciente tiene peso registrado (especialmente en pediatría), calculá la dosis orientativa en ml o gotas acorde a su peso y concentración del medicamento en stock.
 2. EVALUACIÓN DEL STOCK:
-   - Si en "STOCK DISPONIBLE Y VIGENTE" hay uno o más medicamentos que sirven para tratar el malestar consultado, incluilos en "recomendados_del_stock" con su "id" exacto, "dosis_sugerida" orientativa, y "cantidad_descontar_sugerida" (ej: 1 para 1 comprimido, 5 para 5 ml, etc.).
+   - Si en "STOCK DISPONIBLE Y VIGENTE" hay uno o más medicamentos que sirven para tratar el malestar consultado y son seguros para los antecedentes del paciente, incluilos en "recomendados_del_stock" con su "id" exacto, "dosis_sugerida" orientativa, y "cantidad_descontar_sugerida" (ej: 1 para 1 comprimido, 5 para 5 ml, etc.).
    - Si NO hay NADA disponible en el stock vigente para tratar ese malestar (o si lo que había está vencido o sin stock), poné "en_stock_utilizable": false, explicá claramente que actualmente NO tiene nada apto en su stock para ese cuadro, y completá obligatoriamente "sugerencias_compra" con opciones concretas para comprar en la farmacia.
-   - Incluso si tiene algo parcial en stock (ej. tiene analgésico pero para vómitos le faltan Sales de Rehidratación Oral), podés sugerir el complemento en "sugerencias_compra".
 3. ADVERTENCIAS DE VENCIDOS / SIN STOCK:
-   - Si en "MEDICAMENTOS EN EL BOTIQUÍN QUE ESTÁN VENCIDOS O SIN STOCK" hay algún producto que hubiera servido para este síntoma, agregá una alerta clara en "advertencias_stock" diciendo por ejemplo: "Tenés [Nombre] cargado en el botiquín pero está VENCIDO / SIN STOCK. No lo utilices y reponelo."
+   - Si en "MEDICAMENTOS EN EL BOTIQUÍN QUE ESTÁN VENCIDOS O SIN STOCK" hay algún producto que hubiera servido para este síntoma, agregá una alerta clara en "advertencias_stock".
 
 Devolvé EXCLUSIVAMENTE un objeto JSON válido con esta estructura exacta:
 {
-  "respuesta_markdown": "Explicación clara, cálida y bien estructurada (usando negritas y viñetas) respondiendo directamente qué puede usar de su stock (indicando cuántas pastillas/ml le quedan y cuándo vence), o informando si no tiene nada en stock y qué debería comprar, más cuidados generales.",
+  "respuesta_markdown": "Explicación clara, cálida y bien estructurada (usando negritas y viñetas) personalizada para el paciente, respondiendo directamente qué puede usar de su stock (indicando cuántas pastillas/ml le quedan y cuándo vence), o informando si no tiene nada en stock y qué debería comprar, más cuidados generales.",
   "en_stock_utilizable": true,
   "recomendados_del_stock": [
     {

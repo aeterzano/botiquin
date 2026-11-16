@@ -156,6 +156,8 @@ function getInitialState(): BotiquinState {
     movimientos: [],
     config: DEFAULT_CONFIG,
     alertas_log: [],
+    familia: [],
+    consultas_historial: [],
   }
 }
 
@@ -208,12 +210,26 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
         await supabase.from('botiquin_config').upsert(DEFAULT_CONFIG)
       }
 
+      let storageExtras: Partial<BotiquinState> = {}
+      try {
+        const { data: stData } = await supabase.storage
+          .from(BUCKET_NAME)
+          .download(STORAGE_STATE_PATH)
+        if (stData) {
+          storageExtras = JSON.parse(await stData.text())
+        }
+      } catch {
+        // ignore
+      }
+
       const state: BotiquinState = {
         medicamentos: (meds as Medicamento[]).map(normalizeMedicamento),
         esenciales,
         movimientos: (movRes.data as MovimientoStock[]) || [],
         config,
         alertas_log: (logRes.data as AlertaLog[]) || [],
+        familia: storageExtras.familia || [],
+        consultas_historial: storageExtras.consultas_historial || [],
       }
 
       saveLocalMirror(state)
@@ -238,6 +254,8 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
         movimientos: parsed.movimientos || [],
         config: { ...DEFAULT_CONFIG, ...(parsed.config || {}) },
         alertas_log: parsed.alertas_log || [],
+        familia: parsed.familia || [],
+        consultas_historial: parsed.consultas_historial || [],
       }
       saveLocalMirror(state)
       return state
@@ -259,6 +277,8 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
         movimientos: parsed.movimientos || [],
         config: { ...DEFAULT_CONFIG, ...(parsed.config || {}) },
         alertas_log: parsed.alertas_log || [],
+        familia: parsed.familia || [],
+        consultas_historial: parsed.consultas_historial || [],
       }
     } catch {
       // ignore
