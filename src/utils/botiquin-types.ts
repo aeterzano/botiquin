@@ -172,6 +172,15 @@ export const CATEGORIAS_MEDICAMENTOS = [
   'Otro',
 ]
 
+export function normalizeText(str: string | null | undefined): string {
+  if (!str) return ''
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+}
+
 export function calcularEdadDesdeFecha(fechaNacimiento: string | null | undefined): {
   anios: number
   meses: number
@@ -219,26 +228,78 @@ export function calcularEdadDesdeFecha(fechaNacimiento: string | null | undefine
   return { anios: years, meses: months, totalMeses, texto, esPediatrico }
 }
 
+/**
+ * Deduplicates essentials and only adds truly new categories/drugs not already covered
+ * by the existing catalog, and links any matching medications in stock.
+ */
 export function generarEsencialesSegunFamilia(
   familia: MiembroFamilia[],
-  esencialesActuales: ProductoEsencial[]
-): { nuevos: ProductoEsencial[]; listaActualizada: ProductoEsencial[] } {
-  const lista = [...esencialesActuales]
+  esencialesActuales: ProductoEsencial[],
+  medicamentosActuales: Medicamento[] = []
+): {
+  nuevos: ProductoEsencial[]
+  listaActualizada: ProductoEsencial[]
+  idsEliminadosPorDuplicado: string[]
+  medicamentosActualizados: Medicamento[]
+} {
+  const idsRedundantesConCatalogoBase = new Set([
+    'esc-fam-migrana-adulto',
+    'esc-fam-migrana-pediatrico',
+    'esc-fam-protector-gastrico-adulto',
+    'esc-fam-antiespasmodico-adulto',
+    'esc-fam-alergia-especifica-adulto',
+    'esc-fam-alergia-especifica-pediatrico',
+  ])
+
+  const idsEliminadosPorDuplicado: string[] = []
+  const lista: ProductoEsencial[] = []
+
+  for (const item of esencialesActuales) {
+    if (idsRedundantesConCatalogoBase.has(item.id)) {
+      idsEliminadosPorDuplicado.push(item.id)
+      continue
+    }
+    lista.push(item)
+  }
+
   const nuevos: ProductoEsencial[] = []
   const nowIso = new Date().toISOString()
 
+  const extractDrugTokens = (text: string): string[] => {
+    return normalizeText(text)
+      .replace(/\([^)]*\)/g, ' ')
+      .split(/[/,+•·\s]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 4 && !['para', 'adulto', 'adultos', 'pediatrico', 'gotas', 'jarabe', 'suspension', 'comprimidos', 'oral', 'fuerte'].includes(t))
+  }
+
   const addIfNotExists = (candidato: Omit<ProductoEsencial, 'created_at' | 'activo'>) => {
-    const yaExiste = lista.some(
-      (e) =>
-        e.id === candidato.id ||
-        e.nombre.toLowerCase() === candidato.nombre.toLowerCase() ||
-        (e.publico === candidato.publico &&
-          candidato.keywords.some((kw) =>
-            e.keywords.map((k) => k.toLowerCase()).includes(kw.toLowerCase())
-          ) &&
-          e.categoria === candidato.categoria)
-    )
-    if (!yaExiste) {
+    const candTokens = new Set([
+      ...extractDrugTokens(candidato.droga_sugerida),
+      ...candidato.keywords.map((k) => normalizeText(k)),
+    ])
+
+    const yaCubiertoEnCatalogo = lista.some((existente) => {
+      if (existente.id === candidato.id) return true
+      if (normalizeText(existente.nombre) === normalizeText(candidato.nombre)) return true
+
+      const publicoCompatible =
+        existente.publico === 'ambos' ||
+        candidato.publico === 'ambos' ||
+        existente.publico === candidato.publico
+
+      if (!publicoCompatible) return false
+
+      const existTokens = [
+        ...extractDrugTokens(existente.droga_sugerida),
+        ...existente.keywords.map((k) => normalizeText(k)),
+      ]
+
+      // If any active drug or keyword overlaps for the same target audience, do NOT duplicate!
+      return existTokens.some((tok) => tok && candTokens.has(tok))
+    })
+
+    if (!yaCubiertoEnCatalogo) {
       const nuevoItem: ProductoEsencial = {
         ...candidato,
         activo: true,
@@ -252,18 +313,17 @@ export function generarEsencialesSegunFamilia(
   for (const miembro of familia) {
     const edad = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
     const publicoMiembro: PublicoObjetivo = edad.esPediatrico ? 'pediatrico' : 'adulto'
-    const textoClinico = `${miembro.antecedentes_medicos || ''} ${miembro.dolores_recurrentes || ''} ${
-      miembro.alergias || ''
-    }`
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
+    const textoClinico = normalizeText(
+      `${miembro.antecedentes_medicos || ''} ${miembro.dolores_recurrentes || ''} ${
+        miembro.alergias || ''
+      }`
+    )
 
-    // Reglas por edad pediátrica / lactante
+    // 1. Lactantes / primera infancia: Solución fisiológica
     if (edad.totalMeses <= 36) {
       addIfNotExists({
         id: 'esc-fam-solucion-fisiologica',
-        nombre: 'Solución Fisiológica (Lavajes nasales / Nebulizar)',
+        nombre: 'Solución Fisiológica',
         droga_sugerida: 'Cloruro de Sodio 0.9%',
         publico: 'pediatrico',
         categoria: 'Resfrío / Tos / Vías Respiratorias',
@@ -274,84 +334,23 @@ export function generarEsencialesSegunFamilia(
       })
     }
 
-    // Dolores recurrentes / antecedentes específicos
-    if (/(migrana|jaqueca|cefalea|dolor de cabeza)/.test(textoClinico)) {
+    // 2. Cólicos / gases en bebés (Simeticona no está en el catálogo base pediátrico)
+    if (edad.esPediatrico && /(colico|gases|meteorismo)/.test(textoClinico)) {
       addIfNotExists({
-        id: `esc-fam-migrana-${publicoMiembro}`,
-        nombre:
-          publicoMiembro === 'adulto'
-            ? 'Analgésico / Antimigrañoso Fuerte'
-            : 'Analgésico Cefalea Pediátrico',
-        droga_sugerida:
-          publicoMiembro === 'adulto'
-            ? 'Ibuprofeno 600mg / Naproxeno / Paracetamol 1g'
-            : 'Ibuprofeno 4% / Paracetamol',
-        publico: publicoMiembro,
-        categoria: 'Analgésico / Antifebril',
-        stock_minimo_sugerido: 4,
-        unidad_sugerida: publicoMiembro === 'adulto' ? 'comprimidos' : 'ml',
-        keywords: ['migral', 'tetralgin', 'naproxeno', 'ibuprofeno 600', 'actron 600', 'tafirol 1g'],
-        descripcion: `Dolor de cabeza intenso o migrañas recurrentes (${miembro.nombre}).`,
-      })
-    }
-
-    if (/(espalda|lumbar|cervical|contractura|ciatico|muscular|cuello)/.test(textoClinico)) {
-      addIfNotExists({
-        id: 'esc-fam-contractura-muscular',
-        nombre: 'Descontracturante / Miorelajante',
-        droga_sugerida: 'Diclofenac + Pridinol / Ibuprofeno + Clorzoxazona',
-        publico: 'adulto',
-        categoria: 'Antiinflamatorio / Muscular',
-        stock_minimo_sugerido: 4,
-        unidad_sugerida: 'comprimidos',
-        keywords: ['oxagesic', 'blokium flex', 'pridinol', 'clorzoxazona', 'ibupirac flex', 'atomo'],
-        descripcion: `Contracturas, dolor lumbar, cervical o muscular recurrente (${miembro.nombre}).`,
-      })
-    }
-
-    if (/(acidez|gastritis|reflujo|estomago|ardor|ulcera|indigestion)/.test(textoClinico)) {
-      addIfNotExists({
-        id: `esc-fam-protector-gastrico-${publicoMiembro}`,
-        nombre: 'Antiácido / Protector Gástrico',
-        droga_sugerida: 'Omeprazol / Esomeprazol / Hidróxido de Aluminio y Magnesio',
-        publico: publicoMiembro,
+        id: 'esc-fam-simeticona-pediatrico',
+        nombre: 'Antiflatulento / Cólicos',
+        droga_sugerida: 'Simeticona',
+        publico: 'pediatrico',
         categoria: 'Digestivo / Antiácido / Antiespasmódico',
-        stock_minimo_sugerido: 4,
-        unidad_sugerida: 'comprimidos',
-        keywords: ['omeprazol', 'esomeprazol', 'mylanta', 'rennie', 'alikal', 'uvasal', 'pantoprazol'],
-        descripcion: `Acidez, gastritis o malestar estomacal recurrente (${miembro.nombre}).`,
+        stock_minimo_sugerido: 1,
+        unidad_sugerida: 'gotas',
+        keywords: ['factor ag', 'simeticona', 'mylicon', 'colicos'],
+        descripcion: `Gases y cólicos abdominales (${miembro.nombre}).`,
       })
     }
 
-    if (/(colico|panza|abdominal|menstrual|gases|meteorismo)/.test(textoClinico)) {
-      if (edad.esPediatrico) {
-        addIfNotExists({
-          id: 'esc-fam-simeticona-pediatrico',
-          nombre: 'Antiflatulento / Cólicos (Gotas)',
-          droga_sugerida: 'Simeticona',
-          publico: 'pediatrico',
-          categoria: 'Digestivo / Antiácido / Antiespasmódico',
-          stock_minimo_sugerido: 1,
-          unidad_sugerida: 'gotas',
-          keywords: ['factor ag', 'simeticona', 'mylicon', 'colicos'],
-          descripcion: `Gases y cólicos abdominales (${miembro.nombre}).`,
-        })
-      } else {
-        addIfNotExists({
-          id: 'esc-fam-antiespasmodico-adulto',
-          nombre: 'Antiespasmódico Abdominal',
-          droga_sugerida: 'Hioscina (Buscapina) / Propinox (Sertal)',
-          publico: 'adulto',
-          categoria: 'Digestivo / Antiácido / Antiespasmódico',
-          stock_minimo_sugerido: 4,
-          unidad_sugerida: 'comprimidos',
-          keywords: ['buscapina', 'sertal', 'hioscina', 'propinox'],
-          descripcion: `Dolor de panza, cólicos o espasmos (${miembro.nombre}).`,
-        })
-      }
-    }
-
-    if (/(asma|broncoespasmo|bronquiolitis|sibilancia|ahogo|tos)/.test(textoClinico)) {
+    // 3. Asma / broncoespasmo (Salbutamol / Budesonide no está en el catálogo base)
+    if (/(asma|broncoespasmo|bronquiolitis|sibilancia|ahogo)/.test(textoClinico)) {
       addIfNotExists({
         id: `esc-fam-broncodilatador-${publicoMiembro}`,
         nombre: 'Broncodilatador / Rescate Respiratorio',
@@ -361,15 +360,16 @@ export function generarEsencialesSegunFamilia(
         stock_minimo_sugerido: 1,
         unidad_sugerida: 'disparos',
         keywords: ['salbutamol', 'ventolin', 'budesonide', 'neumotex', 'paf'],
-        descripcion: `Antecedentes de broncoespasmo, asma o tos obstructiva (${miembro.nombre}).`,
+        descripcion: `Broncoespasmo, asma o tos obstructiva (${miembro.nombre}).`,
       })
     }
 
+    // 4. Otitis / dolor de oído recurrente (Gotas óticas no están en el catálogo base)
     if (/(otitis|oido)/.test(textoClinico)) {
       addIfNotExists({
         id: `esc-fam-otico-${publicoMiembro}`,
-        nombre: 'Gotas Óticas (Dolor / Inflamación de Oído)',
-        droga_sugerida: 'Ciprofloxacina + Hidrocortisona / Antipirina + Benzocaína',
+        nombre: 'Gotas Óticas (Oído)',
+        droga_sugerida: 'Ciprofloxacina + Hidrocortisona / Benzocaína',
         publico: publicoMiembro,
         categoria: 'Otro',
         stock_minimo_sugerido: 1,
@@ -378,40 +378,30 @@ export function generarEsencialesSegunFamilia(
         descripcion: `Dolor de oído u otitis recurrente (${miembro.nombre}).`,
       })
     }
-
-    if (/(rinitis|alergia|urticaria|dermatitis|picazon|atopia)/.test(textoClinico)) {
-      addIfNotExists({
-        id: `esc-fam-alergia-especifica-${publicoMiembro}`,
-        nombre:
-          publicoMiembro === 'pediatrico'
-            ? 'Antialérgico Jarabe / Gotas Pediátrico'
-            : 'Antihistamínico de 2da Generación (Sin sueño)',
-        droga_sugerida: 'Desloratadina / Cetirizina / Loratadina',
-        publico: publicoMiembro,
-        categoria: 'Antialérgico / Antihistamínico',
-        stock_minimo_sugerido: 1,
-        unidad_sugerida: publicoMiembro === 'pediatrico' ? 'ml' : 'comprimidos',
-        keywords: ['aerius', 'alerpriv', 'cetirizina', 'desloratadina', 'loratadina', 'hexaler'],
-        descripcion: `Alergias, rinitis o brotes cutáneos (${miembro.nombre}).`,
-      })
-    }
-
-    if (/(garganta|faringitis|angina|disfonia)/.test(textoClinico) && !edad.esPediatrico) {
-      addIfNotExists({
-        id: 'esc-fam-antiseptico-faringeo',
-        nombre: 'Caramelos / Spray Antiséptico y Analgésico de Garganta',
-        droga_sugerida: 'Bencidamina / Benzocaína / Gramicidina',
-        publico: 'adulto',
-        categoria: 'Resfrío / Tos / Vías Respiratorias',
-        stock_minimo_sugerido: 4,
-        unidad_sugerida: 'comprimidos',
-        keywords: ['strepsils', 'atenol', 'anginovag', 'biocord', 'refrianex', 'garganta'],
-        descripcion: `Dolor de garganta o faringitis recurrente (${miembro.nombre}).`,
-      })
-    }
   }
 
-  return { nuevos, listaActualizada: lista }
+  // Re-evaluate all medications in stock so any medication that matches an essential is linked
+  const medicamentosActualizados = medicamentosActuales.map((med) => {
+    const matchedEssential = lista.find((esc) => {
+      if (!esc.activo) return false
+      return doesMedMatchEsencial(med, esc)
+    })
+    if (matchedEssential && (!med.es_esencial || !med.esencial_id)) {
+      return {
+        ...med,
+        es_esencial: true,
+        esencial_id: med.esencial_id || matchedEssential.id,
+      }
+    }
+    return med
+  })
+
+  return {
+    nuevos,
+    listaActualizada: lista,
+    idsEliminadosPorDuplicado,
+    medicamentosActualizados,
+  }
 }
 
 export function calcularDiasVencimiento(fechaVencimiento: string | null): number | null {
@@ -436,10 +426,78 @@ export function esMedicamentoProximoAVencer(med: Medicamento, umbralDias: number
   return dias !== null && dias >= 0 && dias <= umbralDias
 }
 
+export function doesMedMatchEsencial(
+  med: {
+    nombre?: string
+    droga?: string
+    categoria?: string
+    para_que_sirve?: string
+    publico?: PublicoObjetivo
+    es_esencial?: boolean
+    esencial_id?: string | null
+  },
+  esencial: ProductoEsencial
+): boolean {
+  if (med.esencial_id && med.esencial_id === esencial.id) return true
+
+  const publicoCompatible =
+    !med.publico ||
+    esencial.publico === 'ambos' ||
+    med.publico === 'ambos' ||
+    med.publico === esencial.publico
+
+  if (!publicoCompatible) return false
+
+  const textoMed = normalizeText(
+    `${med.nombre || ''} ${med.droga || ''} ${med.para_que_sirve || ''}`
+  )
+  if (!textoMed) return false
+
+  // 1. Check keywords
+  if (
+    esencial.keywords.some((kw) => {
+      const k = normalizeText(kw)
+      return k && textoMed.includes(k)
+    })
+  ) {
+    return true
+  }
+
+  // 2. Check active drug tokens in droga_sugerida (e.g. "Ibuprofeno / Diclofenac", "Paracetamol")
+  const drugTokens = normalizeText(esencial.droga_sugerida)
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/[/,+•·\s]+/)
+    .map((t) => t.trim())
+    .filter(
+      (t) =>
+        t.length >= 4 &&
+        ![
+          'para',
+          'adulto',
+          'adultos',
+          'pediatrico',
+          'gotas',
+          'jarabe',
+          'suspension',
+          'comprimidos',
+          'oral',
+          'sales',
+          'agua',
+        ].includes(t)
+    )
+
+  if (drugTokens.some((tok) => textoMed.includes(tok))) {
+    return true
+  }
+
+  return false
+}
+
 export function esProductoConsideradoEsencial(
   med: {
     nombre?: string
     droga?: string
+    categoria?: string
     para_que_sirve?: string
     publico?: PublicoObjetivo
     es_esencial?: boolean
@@ -448,26 +506,8 @@ export function esProductoConsideradoEsencial(
   esenciales: ProductoEsencial[]
 ): boolean {
   if (med.es_esencial || med.esencial_id) return true
-
-  const textoMed = `${med.nombre || ''} ${med.droga || ''} ${med.para_que_sirve || ''}`
-    .toLowerCase()
-    .trim()
-  if (!textoMed) return false
-
   const esencialesActivos = esenciales.filter((e) => e.activo)
-  return esencialesActivos.some((esencial) => {
-    const publicoCompatible =
-      !med.publico ||
-      esencial.publico === 'ambos' ||
-      med.publico === 'ambos' ||
-      med.publico === esencial.publico
-
-    if (!publicoCompatible) return false
-
-    return esencial.keywords.some(
-      (kw) => kw.trim() && textoMed.includes(kw.toLowerCase().trim())
-    )
-  })
+  return esencialesActivos.some((esencial) => doesMedMatchEsencial(med, esencial))
 }
 
 export function calcularStockMinimoPorDefecto(
@@ -487,19 +527,7 @@ export function verificarCoberturaEsencial(
     (m) => m.estado === 'activo' && m.cantidad_actual > 0 && !esMedicamentoVencido(m)
   )
 
-  const coincidencias = activosVigentes.filter((m) => {
-    if (m.esencial_id && m.esencial_id === esencial.id) return true
-
-    const publicoCompatible =
-      esencial.publico === 'ambos' ||
-      m.publico === 'ambos' ||
-      m.publico === esencial.publico
-
-    if (!publicoCompatible) return false
-
-    const textoMed = `${m.nombre} ${m.droga} ${m.para_que_sirve}`.toLowerCase()
-    return esencial.keywords.some((kw) => kw.trim() && textoMed.includes(kw.toLowerCase().trim()))
-  })
+  const coincidencias = activosVigentes.filter((m) => doesMedMatchEsencial(m, esencial))
 
   return {
     cubierto: coincidencias.length > 0,

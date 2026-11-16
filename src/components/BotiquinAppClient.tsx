@@ -36,6 +36,8 @@ import {
   Images,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Download,
 } from 'lucide-react'
 import {
@@ -59,7 +61,7 @@ import {
 } from '@/utils/botiquin-types'
 import { CampoFaltanteIA, ConsultaAIResponse } from '@/utils/ai-botiquin'
 
-type TabType = 'stock' | 'consulta' | 'historial' | 'configuracion'
+type TabType = 'stock' | 'consulta' | 'configuracion'
 type ConfigSubTab = 'familia' | 'esenciales' | 'alertas'
 type ModoCargaMed = 'hibrido_ia' | 'manual'
 type MedModalTab = 'general' | 'stock' | 'uso'
@@ -259,6 +261,10 @@ export default function BotiquinAppClient({
     null
   )
 
+  // Expanded family member history state inside Configuración -> Familia
+  const [expandedFamiliarHistoryId, setExpandedFamiliarHistoryId] = useState<string | null>(null)
+  const [familiarHistoryTab, setFamiliarHistoryTab] = useState<'consultas' | 'consumos'>('consultas')
+
   // PWA Install Prompt state
   const [deferredInstallPrompt, setDeferredInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null)
@@ -347,10 +353,6 @@ export default function BotiquinAppClient({
   const [consultingAI, setConsultingAI] = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatItem[]>([])
 
-  // Historial filter state
-  const [historialFilterFamiliarId, setHistorialFilterFamiliarId] = useState<string>('todos')
-  const [historialVista, setHistorialVista] = useState<'consultas' | 'consumos'>('consultas')
-
   // Family Member Modal state
   const [familiarModalOpen, setFamiliarModalOpen] = useState(false)
   const [editingFamiliar, setEditingFamiliar] = useState<MiembroFamilia | null>(null)
@@ -417,15 +419,13 @@ export default function BotiquinAppClient({
   // Keep selectedFamiliarId valid when family list changes
   useEffect(() => {
     const fam = state.familia || []
-    if (fam.length > 0 && selectedFamiliarId === 'otro' && chatMessages.length === 0) {
-      // keep 'otro' if explicitly chosen, or select first if none was valid
-    } else if (
+    if (
       selectedFamiliarId !== 'otro' &&
       !fam.some((f) => f.id === selectedFamiliarId)
     ) {
       setSelectedFamiliarId(fam.length > 0 ? fam[0].id : 'otro')
     }
-  }, [state.familia, selectedFamiliarId, chatMessages.length])
+  }, [state.familia, selectedFamiliarId])
 
   // Sorted Esenciales: 1st pediatrico (bebé), 2nd ambos (familia), 3rd adulto (adultos)
   const sortedEsenciales = useMemo(() => {
@@ -441,30 +441,101 @@ export default function BotiquinAppClient({
     })
   }, [state.esenciales])
 
-  // Sync activeTab with URL query param (?tab=stock|consulta|historial|configuracion|esenciales|alertas)
+  // Helper to change section/subsection and persist in URL + localStorage so refreshing stays in the exact same view
+  function navigateToSection(tab: TabType, sub?: ConfigSubTab) {
+    setActiveTab(tab)
+    const nextSub = sub || configSubTab
+    if (sub) {
+      setConfigSubTab(sub)
+    }
+    setMobileMenuOpen(false)
+
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem('botiquin_active_tab', tab)
+        window.localStorage.setItem('botiquin_config_subtab', nextSub)
+      } catch {
+        // ignore
+      }
+      const url =
+        tab === 'stock'
+          ? '/?tab=stock'
+          : tab === 'configuracion'
+          ? `/?tab=configuracion&sub=${nextSub}`
+          : `/?tab=${tab}`
+      window.history.pushState(null, '', url)
+    }
+  }
+
+  // Restore exact section and subsection on mount / refresh / popstate
   useEffect(() => {
-    function syncTabFromUrl() {
+    function syncTabFromUrlOrStorage() {
       const params = new URLSearchParams(window.location.search)
       const tabParam = params.get('tab')
       const subParam = params.get('sub')
-      if (tabParam === 'stock' || tabParam === 'consulta' || tabParam === 'historial') {
-        setActiveTab(tabParam)
-      } else if (tabParam === 'configuracion') {
-        setActiveTab('configuracion')
+
+      let resolvedTab: TabType | null = null
+      let resolvedSub: ConfigSubTab | null = null
+
+      if (tabParam === 'stock' || tabParam === 'consulta') {
+        resolvedTab = tabParam
+      } else if (tabParam === 'configuracion' || tabParam === 'historial') {
+        resolvedTab = 'configuracion'
         if (subParam === 'familia' || subParam === 'esenciales' || subParam === 'alertas') {
-          setConfigSubTab(subParam)
+          resolvedSub = subParam
+        } else {
+          resolvedSub = 'familia'
         }
       } else if (tabParam === 'esenciales') {
-        setActiveTab('configuracion')
-        setConfigSubTab('esenciales')
+        resolvedTab = 'configuracion'
+        resolvedSub = 'esenciales'
       } else if (tabParam === 'alertas') {
-        setActiveTab('configuracion')
-        setConfigSubTab('alertas')
+        resolvedTab = 'configuracion'
+        resolvedSub = 'alertas'
+      } else {
+        // Fallback to localStorage if URL had no ?tab= parameter on refresh
+        try {
+          const savedTab = window.localStorage.getItem('botiquin_active_tab')
+          const savedSub = window.localStorage.getItem('botiquin_config_subtab')
+          if (savedTab === 'stock' || savedTab === 'consulta' || savedTab === 'configuracion') {
+            resolvedTab = savedTab
+          }
+          if (savedSub === 'familia' || savedSub === 'esenciales' || savedSub === 'alertas') {
+            resolvedSub = savedSub
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const finalTab = resolvedTab || 'stock'
+      const finalSub = resolvedSub || 'familia'
+
+      setActiveTab(finalTab)
+      setConfigSubTab(finalSub)
+
+      try {
+        window.localStorage.setItem('botiquin_active_tab', finalTab)
+        window.localStorage.setItem('botiquin_config_subtab', finalSub)
+      } catch {
+        // ignore
+      }
+
+      const expectedUrl =
+        finalTab === 'stock'
+          ? '/?tab=stock'
+          : finalTab === 'configuracion'
+          ? `/?tab=configuracion&sub=${finalSub}`
+          : `/?tab=${finalTab}`
+
+      if (window.location.search !== expectedUrl.replace('/', '')) {
+        window.history.replaceState(null, '', expectedUrl)
       }
     }
-    syncTabFromUrl()
-    window.addEventListener('popstate', syncTabFromUrl)
-    return () => window.removeEventListener('popstate', syncTabFromUrl)
+
+    syncTabFromUrlOrStorage()
+    window.addEventListener('popstate', syncTabFromUrlOrStorage)
+    return () => window.removeEventListener('popstate', syncTabFromUrlOrStorage)
   }, [])
 
   function handleTabNavClick(
@@ -476,16 +547,7 @@ export default function BotiquinAppClient({
       return
     }
     e.preventDefault()
-    setActiveTab(tab)
-    if (sub) setConfigSubTab(sub)
-    setMobileMenuOpen(false)
-    const url =
-      tab === 'stock'
-        ? '/'
-        : tab === 'configuracion' && sub
-        ? `/?tab=configuracion&sub=${sub}`
-        : `/?tab=${tab}`
-    window.history.pushState(null, '', url)
+    navigateToSection(tab, sub)
   }
 
   // Close any open pop-up when pressing ESC
@@ -1241,33 +1303,6 @@ export default function BotiquinAppClient({
     }
   }
 
-  async function handleSyncEsencialesFamilia() {
-    try {
-      const res = await fetch('/api/botiquin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'sync_esenciales_familia' }),
-      })
-      const json = await res.json()
-      if (!json.ok) throw new Error(json.error)
-      setState(json.state)
-      setAlertas(json.alertasActivas)
-      if (json.nuevosEsencialesCount > 0) {
-        showToast(
-          `Se agregaron ${json.nuevosEsencialesCount} producto(s) esencial(es) según las fichas familiares`,
-          'success'
-        )
-      } else {
-        showToast(
-          'El catálogo de esenciales ya cubre los antecedentes y edades de tu familia',
-          'info'
-        )
-      }
-    } catch {
-      showToast('Error actualizando esenciales', 'error')
-    }
-  }
-
   async function handleDeleteConsultaHistorial(id: string) {
     try {
       const res = await fetch('/api/botiquin', {
@@ -1407,7 +1442,7 @@ export default function BotiquinAppClient({
   )
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#0b0c10] text-foreground pb-24 md:pb-8">
+    <div className="min-h-screen flex flex-col bg-[#0b0c10] text-foreground pb-20 landscape:pb-16 md:pb-8">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-20 md:bottom-6 right-4 z-50 max-w-md animate-in fade-in slide-in-from-bottom-3">
@@ -1432,16 +1467,16 @@ export default function BotiquinAppClient({
         </div>
       )}
 
-      {/* Navbar with high contrast against the dark background */}
-      <nav className="border-b border-[#383e4e] bg-[#1e222d] px-4 md:px-8 py-3.5 sticky top-0 z-40 shadow-lg">
+      {/* Navbar (compact in mobile landscape) */}
+      <nav className="border-b border-[#383e4e] bg-[#1e222d] px-4 md:px-8 py-3 landscape:py-2 md:landscape:py-3.5 sticky top-0 z-40 shadow-lg">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <div className="flex items-center space-x-8">
             <a
-              href="/"
+              href="/?tab=stock"
               onClick={(e) => handleTabNavClick(e, 'stock')}
               className="flex items-center space-x-3 text-left"
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/40 text-primary">
+              <div className="flex h-9 w-9 landscape:h-8 landscape:w-8 md:landscape:h-9 md:landscape:w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/40 text-primary">
                 <HeartPulse className="h-5 w-5" />
               </div>
               <span className="text-lg font-bold text-foreground tracking-tight block leading-none">
@@ -1449,7 +1484,7 @@ export default function BotiquinAppClient({
               </span>
             </a>
 
-            {/* Desktop Nav Links: Stock | Consultorio IA | Historial | Configuración */}
+            {/* Desktop Nav Links: Stock | Consultorio IA | Configuración */}
             <div className="hidden md:flex items-center space-x-2">
               <a
                 href="/?tab=stock"
@@ -1478,21 +1513,8 @@ export default function BotiquinAppClient({
               </a>
 
               <a
-                href="/?tab=historial"
-                onClick={(e) => handleTabNavClick(e, 'historial')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  activeTab === 'historial'
-                    ? greyBtnActive
-                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
-                }`}
-              >
-                <History className="h-4 w-4" />
-                <span>Historial</span>
-              </a>
-
-              <a
-                href="/?tab=configuracion"
-                onClick={(e) => handleTabNavClick(e, 'configuracion')}
+                href={`/?tab=configuracion&sub=${configSubTab}`}
+                onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'configuracion'
                     ? greyBtnActive
@@ -1506,7 +1528,6 @@ export default function BotiquinAppClient({
           </div>
 
           <div className="hidden md:flex items-center space-x-3">
-            {/* + Medicamento styled with the same colors, background and border lines as the Heart icon */}
             <button
               onClick={() => openNewMedModal()}
               className="flex items-center space-x-1.5 rounded-xl bg-primary/15 border border-primary/40 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/25 shadow-sm transition-colors"
@@ -1543,9 +1564,9 @@ export default function BotiquinAppClient({
           </div>
         </div>
 
-        {/* Mobile Hamburger Dropdown Menu with all Sections + PWA Install + Sign Out */}
+        {/* Mobile Hamburger Dropdown Menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-[#383e4e] mt-3 pt-3 pb-2 flex flex-col space-y-1.5">
+          <div className="md:hidden border-t border-[#383e4e] mt-2.5 pt-2.5 pb-2 flex flex-col space-y-1.5 max-h-[75dvh] overflow-y-auto">
             <a
               href="/?tab=stock"
               onClick={(e) => handleTabNavClick(e, 'stock')}
@@ -1573,21 +1594,8 @@ export default function BotiquinAppClient({
             </a>
 
             <a
-              href="/?tab=historial"
-              onClick={(e) => handleTabNavClick(e, 'historial')}
-              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
-                activeTab === 'historial'
-                  ? greyBtnActive
-                  : 'text-zinc-200 hover:bg-zinc-800/70'
-              }`}
-            >
-              <History className="h-4 w-4" />
-              <span>Historial</span>
-            </a>
-
-            <a
-              href="/?tab=configuracion"
-              onClick={(e) => handleTabNavClick(e, 'configuracion')}
+              href={`/?tab=configuracion&sub=${configSubTab}`}
+              onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
               className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
                 activeTab === 'configuracion'
                   ? greyBtnActive
@@ -1627,17 +1635,17 @@ export default function BotiquinAppClient({
       </nav>
 
       {/* Main Content Container */}
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 md:px-8 py-6">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 md:px-8 py-4 landscape:py-3 md:py-6">
         {/* ================================================================= */}
         {/* TAB 1: STOCK                                                      */}
         {/* ================================================================= */}
         {activeTab === 'stock' && (
-          <div className="space-y-6">
-            {/* 3 Compact Top Summary Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="space-y-5">
+            {/* 3 Compact Top Summary Cards (3 columns in mobile landscape too) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 landscape:grid-cols-3 gap-3.5">
               <div
                 onClick={() => setFilterEstado('proximo_vencer')}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-amber-400/50 transition-colors"
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-amber-400/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1645,7 +1653,7 @@ export default function BotiquinAppClient({
                   </span>
                   <Clock className="h-4 w-4 text-amber-400" />
                 </div>
-                <div className="mt-1.5 flex items-baseline">
+                <div className="mt-1 flex items-baseline">
                   <span
                     className={`text-2xl font-bold ${
                       kpis.proximosCount > 0 ? 'text-amber-400' : 'text-foreground'
@@ -1658,7 +1666,7 @@ export default function BotiquinAppClient({
 
               <div
                 onClick={() => setFilterEstado('vencidos_sin_stock')}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-red-400/50 transition-colors"
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-red-400/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1666,7 +1674,7 @@ export default function BotiquinAppClient({
                   </span>
                   <AlertTriangle className="h-4 w-4 text-red-400" />
                 </div>
-                <div className="mt-1.5 flex items-baseline space-x-2">
+                <div className="mt-1 flex items-baseline space-x-2">
                   <span
                     className={`text-2xl font-bold ${
                       kpis.vencidosCount > 0 ? 'text-red-400' : 'text-foreground'
@@ -1686,12 +1694,8 @@ export default function BotiquinAppClient({
               </div>
 
               <div
-                onClick={() => {
-                  setActiveTab('configuracion')
-                  setConfigSubTab('esenciales')
-                  window.history.pushState(null, '', '/?tab=configuracion&sub=esenciales')
-                }}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3.5 hover:border-primary/50 transition-colors"
+                onClick={() => navigateToSection('configuracion', 'esenciales')}
+                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-primary/50 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1699,7 +1703,7 @@ export default function BotiquinAppClient({
                   </span>
                   <Star className="h-4 w-4 text-primary" />
                 </div>
-                <div className="mt-1.5 flex items-baseline">
+                <div className="mt-1 flex items-baseline">
                   <span className="text-2xl font-bold text-foreground">
                     {kpis.esencialesCubiertos} de {kpis.esencialesTotal}
                   </span>
@@ -1708,8 +1712,8 @@ export default function BotiquinAppClient({
             </div>
 
             {/* Filters & Search Bar */}
-            <div className="flex flex-col space-y-3.5 rounded-xl border border-[#323846] bg-[#171a22] p-4">
-              <div className="flex flex-col md:flex-row gap-3">
+            <div className="flex flex-col space-y-3 rounded-xl border border-[#323846] bg-[#171a22] p-3.5">
+              <div className="flex flex-col md:flex-row landscape:flex-row gap-2.5">
                 <div className="relative flex-1">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <input
@@ -1753,7 +1757,7 @@ export default function BotiquinAppClient({
               </div>
 
               {/* Status Filter Tabs */}
-              <div className="flex items-center space-x-2 overflow-x-auto pt-2.5 border-t border-[#2c313f]">
+              <div className="flex items-center space-x-2 overflow-x-auto pt-2 border-t border-[#2c313f]">
                 {[
                   { id: 'activos', label: 'Stock actual' },
                   { id: 'proximo_vencer', label: 'Próximos a vencer' },
@@ -1783,7 +1787,7 @@ export default function BotiquinAppClient({
               </div>
             </div>
 
-            {/* Medications Grid */}
+            {/* Medications Grid (2 cols in mobile landscape, 3 in desktop) */}
             {filteredMeds.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
                 <Pill className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
@@ -1800,7 +1804,7 @@ export default function BotiquinAppClient({
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 landscape:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredMeds.map((med) => {
                   const diasVenc = calcularDiasVencimiento(med.fecha_vencimiento)
                   const vencido = diasVenc !== null && diasVenc < 0
@@ -1832,7 +1836,7 @@ export default function BotiquinAppClient({
                   return (
                     <div
                       key={med.id}
-                      className={`flex flex-col justify-between rounded-2xl border bg-[#171a22] p-5 shadow-md transition-all ${
+                      className={`flex flex-col justify-between rounded-2xl border bg-[#171a22] p-4 shadow-md transition-all ${
                         vencido
                           ? 'border-red-400/50'
                           : proximo
@@ -1842,9 +1846,9 @@ export default function BotiquinAppClient({
                           : 'border-[#323846] hover:border-zinc-500'
                       }`}
                     >
-                      <div className="space-y-3.5">
+                      <div className="space-y-3">
                         {/* Header row: Photo + Badges */}
-                        <div className="flex items-start gap-3.5">
+                        <div className="flex items-start gap-3">
                           {allPhotos.length > 0 ? (
                             <button
                               type="button"
@@ -1900,7 +1904,6 @@ export default function BotiquinAppClient({
                               </span>
                             </div>
 
-                            {/* Styled custom tooltip for Nombre */}
                             <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
                               <span className="block truncate">
                                 {formatEspacioMedida(med.nombre)}
@@ -1918,7 +1921,7 @@ export default function BotiquinAppClient({
                           </div>
                         </div>
 
-                        {/* Single compact line: Disponibilidad: 75% | Vencimiento: 12/2027 ('|' exactly centered) */}
+                        {/* Disponibilidad: 75% | Vencimiento: 12/2027 ('|' exactly centered) */}
                         <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3 py-2 text-xs grid grid-cols-[1fr_auto_1fr] items-center">
                           <span className="text-center truncate">
                             <span className="text-muted-foreground">Disponibilidad:</span>{' '}
@@ -1954,7 +1957,7 @@ export default function BotiquinAppClient({
 
                       {/* Card Footer Actions: Función | Dosis | - | + | Editar | Eliminar */}
                       {med.estado === 'activo' ? (
-                        <div className="mt-4 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-1.5">
+                        <div className="mt-3.5 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-1.5">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1975,7 +1978,7 @@ export default function BotiquinAppClient({
                                 isFuncionOpen
                                   ? 'block'
                                   : 'hidden md:group-hover/sirve:block'
-                              } z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
+                              } z-50 w-max max-w-[250px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
                             >
                               <strong className="text-red-300 block mb-0.5">Función:</strong>
                               {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
@@ -2002,7 +2005,7 @@ export default function BotiquinAppClient({
                                 isDosisOpen
                                   ? 'block'
                                   : 'hidden md:group-hover/dosis:block'
-                              } z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
+                              } z-50 w-max max-w-[250px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
                             >
                               <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
                               {med.posologia_referencia || 'Sin especificar'}
@@ -2064,7 +2067,7 @@ export default function BotiquinAppClient({
                           </button>
                         </div>
                       ) : (
-                        <div className="mt-4 pt-3 border-t border-[#282d3a] flex items-center justify-between text-xs">
+                        <div className="mt-3.5 pt-3 border-t border-[#282d3a] flex items-center justify-between text-xs">
                           <span className="text-red-300 font-medium">
                             Baja ({med.motivo_baja || 'descartado'})
                           </span>
@@ -2097,10 +2100,10 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 2: CONSULTORIO IA (FAMILY MEMBERS + 'OTRO' + PERSONALIZED AI) */}
+        {/* TAB 2: CONSULTORIO IA (ADAPTIVE IN MOBILE PORTRAIT & LANDSCAPE)   */}
         {/* ================================================================= */}
         {activeTab === 'consulta' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
+          <div className="grid grid-cols-1 landscape:grid-cols-3 lg:grid-cols-3 gap-4 items-stretch">
             {/* Left Column: Family Member Selector + 'Otro' + Virtual Medical Robot */}
             <div className="flex flex-col justify-between rounded-2xl border border-[#323846] bg-[#171a22] p-4 lg:h-[calc(100vh-175px)] lg:min-h-[390px] lg:max-h-[490px] overflow-hidden">
               <div className="space-y-3 shrink-0">
@@ -2116,10 +2119,7 @@ export default function BotiquinAppClient({
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveTab('configuracion')
-                      setConfigSubTab('familia')
-                    }}
+                    onClick={() => navigateToSection('configuracion', 'familia')}
                     className="text-[11px] text-primary hover:underline font-medium"
                   >
                     + Familia
@@ -2250,8 +2250,8 @@ export default function BotiquinAppClient({
                 )}
               </div>
 
-              {/* Virtual Medical Robot Character compactly fitting inside the card margins */}
-              <div className="mt-2.5 flex-1 min-h-0 flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-2 text-center overflow-hidden">
+              {/* Virtual Medical Robot Character (hidden on ultra-short mobile landscape to avoid overflow) */}
+              <div className="mt-2.5 flex-1 min-h-0 hidden sm:flex landscape:hidden lg:landscape:flex flex-col items-center justify-center rounded-xl border border-[#282d3b] bg-[#10131b] p-2 text-center overflow-hidden">
                 <svg
                   viewBox="0 0 180 145"
                   className="h-14 w-18 md:h-16 md:w-20 shrink-0 drop-shadow-md"
@@ -2302,19 +2302,19 @@ export default function BotiquinAppClient({
               </div>
             </div>
 
-            {/* Right 2 Columns: Equal-Height Chat Box */}
-            <div className="lg:col-span-2 flex flex-col rounded-2xl border border-[#323846] bg-[#171a22] overflow-hidden h-[calc(100vh-175px)] min-h-[390px] max-h-[490px]">
+            {/* Right 2 Columns: Chat Box */}
+            <div className="landscape:col-span-2 lg:col-span-2 flex flex-col rounded-2xl border border-[#323846] bg-[#171a22] overflow-hidden min-h-[320px] max-h-[75dvh] lg:h-[calc(100vh-175px)] lg:min-h-[390px] lg:max-h-[490px]">
               {/* Chat Messages Area */}
               <div className="flex-1 p-4 md:p-5 space-y-4 overflow-y-auto">
                 {chatMessages.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-primary border border-primary/30 mb-3">
-                      <Sparkles className="h-6 w-6" />
+                  <div className="h-full flex flex-col items-center justify-center text-center px-4 py-6">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/15 text-primary border border-primary/30 mb-2.5">
+                      <Sparkles className="h-5 w-5" />
                     </div>
                     <h3 className="text-base font-bold text-foreground">
                       Hacé una consulta médica sobre tu Botiquín
                     </h3>
-                    <p className="mt-1.5 text-xs text-muted-foreground max-w-md">
+                    <p className="mt-1 text-xs text-muted-foreground max-w-md">
                       {activeFamiliarObj
                         ? `El Dr. Botiquín IA tendrá en cuenta la edad, peso, antecedentes, dolores frecuentes e historial de ${activeFamiliarObj.nombre}.`
                         : 'Seleccioná un integrante de la familia (o "Otro") y escribí el síntoma para revisar tu stock vigente.'}
@@ -2490,19 +2490,19 @@ export default function BotiquinAppClient({
                   e.preventDefault()
                   handleSendConsulta()
                 }}
-                className="border-t border-[#323846] bg-[#11131a] p-3 flex items-center gap-2.5"
+                className="border-t border-[#323846] bg-[#11131a] p-2.5 sm:p-3 flex items-center gap-2"
               >
                 <input
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder="Escribí tu consulta o síntoma..."
-                  className="flex-1 rounded-xl border border-[#343a48] bg-[#171a22] px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none"
+                  className="flex-1 rounded-xl border border-[#343a48] bg-[#171a22] px-3.5 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
                 />
                 <button
                   type="submit"
                   disabled={consultingAI || !chatInput.trim()}
-                  className={`flex items-center space-x-1.5 rounded-xl px-4 py-2.5 text-xs font-semibold disabled:opacity-50 ${greyBtn}`}
+                  className={`flex items-center space-x-1.5 rounded-xl px-4 py-2 text-xs font-semibold disabled:opacity-50 ${greyBtn}`}
                 >
                   {consultingAI ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -2517,269 +2517,45 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 3: HISTORIAL (PATIENT CONSULTATIONS & MEDICATION CONSUMPTIONS)*/}
-        {/* ================================================================= */}
-        {activeTab === 'historial' && (
-          <div className="space-y-4">
-            {/* Top Bar: Patient Filter + View Switcher */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] p-4">
-              <div className="flex items-center flex-wrap gap-1.5">
-                <button
-                  onClick={() => setHistorialFilterFamiliarId('todos')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                    historialFilterFamiliarId === 'todos' ? greyBtnActive : greyBtn
-                  }`}
-                >
-                  Todos
-                </button>
-                {(state.familia || []).map((miembro) => {
-                  const edadInfo = calcularEdadDesdeFecha(miembro.fecha_nacimiento)
-                  return (
-                    <button
-                      key={miembro.id}
-                      onClick={() => setHistorialFilterFamiliarId(miembro.id)}
-                      className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg text-xs font-medium ${
-                        historialFilterFamiliarId === miembro.id ? greyBtnActive : greyBtn
-                      }`}
-                    >
-                      <span>{edadInfo.esPediatrico ? '👶' : '🧑'}</span>
-                      <span>{miembro.nombre}</span>
-                    </button>
-                  )
-                })}
-                <button
-                  onClick={() => setHistorialFilterFamiliarId('otro')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                    historialFilterFamiliarId === 'otro' ? greyBtnActive : greyBtn
-                  }`}
-                >
-                  Otro
-                </button>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setHistorialVista('consultas')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                    historialVista === 'consultas' ? greyBtnActive : greyBtn
-                  }`}
-                >
-                  Consultas IA ({(state.consultas_historial || []).length})
-                </button>
-                <button
-                  onClick={() => setHistorialVista('consumos')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                    historialVista === 'consumos' ? greyBtnActive : greyBtn
-                  }`}
-                >
-                  Consumos (
-                  {(state.movimientos || []).filter((m) => m.tipo === 'consumo').length})
-                </button>
-              </div>
-            </div>
-
-            {historialVista === 'consultas' ? (
-              (() => {
-                const filteredConsultas = (state.consultas_historial || []).filter((c) => {
-                  if (historialFilterFamiliarId === 'todos') return true
-                  if (historialFilterFamiliarId === 'otro') {
-                    return c.familiar_id === 'otro' || !c.familiar_id
-                  }
-                  const fam = (state.familia || []).find(
-                    (f) => f.id === historialFilterFamiliarId
-                  )
-                  return (
-                    c.familiar_id === historialFilterFamiliarId ||
-                    (fam && c.paciente_nombre.toLowerCase() === fam.nombre.toLowerCase())
-                  )
-                })
-
-                if (filteredConsultas.length === 0) {
-                  return (
-                    <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
-                      <Bot className="mx-auto h-10 w-10 text-muted-foreground/50 mb-2.5" />
-                      <h3 className="text-sm font-semibold text-foreground">
-                        No hay consultas registradas para este filtro
-                      </h3>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Cada consulta que realices en el Consultorio IA quedará guardada acá para personalizar futuras respuestas.
-                      </p>
-                    </div>
-                  )
-                }
-
-                return (
-                  <div className="space-y-3">
-                    {filteredConsultas.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 space-y-2.5"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center flex-wrap gap-2">
-                            <span className="inline-flex items-center space-x-1 rounded-xl bg-primary/15 border border-primary/40 px-2.5 py-0.5 text-xs font-semibold text-primary">
-                              <span>
-                                {item.paciente_publico === 'pediatrico' ? '👶' : '🧑'}
-                              </span>
-                              <span>{item.paciente_nombre}</span>
-                            </span>
-                            {item.edad_texto && (
-                              <span className="text-xs text-muted-foreground">
-                                {item.edad_texto}
-                                {item.peso_kg ? ` • ${item.peso_kg} kg` : ''}
-                              </span>
-                            )}
-                            <span className="text-xs text-muted-foreground">
-                              •{' '}
-                              {new Date(item.created_at).toLocaleDateString('es-AR', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteConsultaHistorial(item.id)}
-                            className={`p-1.5 rounded-lg ${greyBtn}`}
-                            title="Eliminar consulta"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-
-                        <div className="rounded-xl bg-[#0e1016] border border-[#282d3b] px-3.5 py-2 text-xs">
-                          <strong className="text-zinc-300">Consulta:</strong>{' '}
-                          <span className="text-foreground">{item.consulta}</span>
-                        </div>
-
-                        <div className="text-xs text-zinc-200 leading-relaxed pl-1 space-y-0.5">
-                          {renderFormattedChatText(item.respuesta_markdown)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })()
-            ) : (
-              (() => {
-                const filteredConsumos = (state.movimientos || []).filter((m) => {
-                  if (m.tipo !== 'consumo') return false
-                  if (historialFilterFamiliarId === 'todos') return true
-                  if (historialFilterFamiliarId === 'otro') {
-                    return !m.familiar_id || m.familiar_id === 'otro'
-                  }
-                  const fam = (state.familia || []).find(
-                    (f) => f.id === historialFilterFamiliarId
-                  )
-                  return (
-                    m.familiar_id === historialFilterFamiliarId ||
-                    (fam &&
-                      ((m.familiar_nombre &&
-                        m.familiar_nombre.toLowerCase() === fam.nombre.toLowerCase()) ||
-                        m.motivo.toLowerCase().includes(fam.nombre.toLowerCase())))
-                  )
-                })
-
-                if (filteredConsumos.length === 0) {
-                  return (
-                    <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
-                      <History className="mx-auto h-10 w-10 text-muted-foreground/50 mb-2.5" />
-                      <h3 className="text-sm font-semibold text-foreground">
-                        No hay consumos de medicamentos registrados para este filtro
-                      </h3>
-                    </div>
-                  )
-                }
-
-                return (
-                  <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 space-y-2">
-                    {filteredConsumos.map((mov) => (
-                      <div
-                        key={mov.id}
-                        className="rounded-xl border border-[#2c313f] bg-[#0e1016] px-3.5 py-2.5 flex items-center justify-between text-xs"
-                      >
-                        <div>
-                          <div className="font-semibold text-foreground flex items-center flex-wrap gap-1.5">
-                            <span>{formatEspacioMedida(mov.medicamento_nombre)}</span>
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-700 text-white font-semibold">
-                              -{mov.cantidad} {mov.unidad}
-                            </span>
-                            {mov.familiar_nombre && (
-                              <span className="px-2 py-0.5 rounded-lg text-[10px] bg-primary/15 border border-primary/40 text-primary font-semibold">
-                                {mov.familiar_nombre}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-muted-foreground mt-0.5">{mov.motivo}</p>
-                        </div>
-                        <div className="text-right text-muted-foreground shrink-0 ml-2">
-                          {new Date(mov.created_at).toLocaleDateString('es-AR', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })()
-            )}
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* TAB 4: CONFIGURACIÓN (SUBSECCIONES: FAMILIA | ESENCIALES | ALERTAS) */}
+        {/* TAB 3: CONFIGURACIÓN (SUBSECCIONES: FAMILIA | ESENCIALES | ALERTAS) */}
         {/* ================================================================= */}
         {activeTab === 'configuracion' && (
           <div className="space-y-4">
             {/* Sub-navigation bar inside Configuración */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
               <div className="flex items-center flex-wrap gap-2">
-                <button
-                  onClick={() => {
-                    setConfigSubTab('familia')
-                    window.history.pushState(null, '', '/?tab=configuracion&sub=familia')
-                  }}
+                <a
+                  href="/?tab=configuracion&sub=familia"
+                  onClick={(e) => handleTabNavClick(e, 'configuracion', 'familia')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'familia' ? greyBtnActive : greyBtn
                   }`}
                 >
                   <Users className="h-3.5 w-3.5" />
                   <span>Familia</span>
-                </button>
+                </a>
 
-                <button
-                  onClick={() => {
-                    setConfigSubTab('esenciales')
-                    window.history.pushState(null, '', '/?tab=configuracion&sub=esenciales')
-                  }}
+                <a
+                  href="/?tab=configuracion&sub=esenciales"
+                  onClick={(e) => handleTabNavClick(e, 'configuracion', 'esenciales')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'esenciales' ? greyBtnActive : greyBtn
                   }`}
                 >
                   <Star className="h-3.5 w-3.5" />
                   <span>Esenciales</span>
-                </button>
+                </a>
 
-                <button
-                  onClick={() => {
-                    setConfigSubTab('alertas')
-                    window.history.pushState(null, '', '/?tab=configuracion&sub=alertas')
-                  }}
+                <a
+                  href="/?tab=configuracion&sub=alertas"
+                  onClick={(e) => handleTabNavClick(e, 'configuracion', 'alertas')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'alertas' ? greyBtnActive : greyBtn
                   }`}
                 >
                   <Bell className="h-3.5 w-3.5" />
                   <span>Alertas</span>
-                </button>
+                </a>
               </div>
 
               {!isStandalonePWA && (
@@ -2795,41 +2571,27 @@ export default function BotiquinAppClient({
             </div>
 
             {/* ------------------------------------------------------------- */}
-            {/* SUBSECCIÓN 4.1: MIEMBROS DE LA FAMILIA                        */}
+            {/* SUBSECCIÓN 3.1: MIEMBROS DE LA FAMILIA + HISTORIAL INTEGRADO  */}
             {/* ------------------------------------------------------------- */}
             {configSubTab === 'familia' && (
               <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
                   <div>
                     <h2 className="text-sm font-bold text-foreground">
                       Miembros de la Familia
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                      Calcula automáticamente las edades, adapta el catálogo de Esenciales y personaliza el Consultorio IA.
+                      Edades automáticas, antecedentes, dolores recurrentes e historial de consultas y consumos por integrante.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    {(state.familia || []).length > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleSyncEsencialesFamilia}
-                        className={`flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
-                        title="Actualizar catálogo de Esenciales según las fichas médicas familiares"
-                      >
-                        <Sparkles className="h-3.5 w-3.5 text-primary" />
-                        <span>Adaptar</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={openNewFamiliarModal}
-                      className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
-                    >
-                      <span>+ Integrante</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={openNewFamiliarModal}
+                    className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
+                  >
+                    <span>+ Integrante</span>
+                  </button>
                 </div>
 
                 {(state.familia || []).length === 0 ? (
@@ -2866,13 +2628,14 @@ export default function BotiquinAppClient({
                           c.familiar_id === miembro.id ||
                           c.paciente_nombre.toLowerCase() === miembro.nombre.toLowerCase()
                       )
+                      const isHistoryExpanded = expandedFamiliarHistoryId === miembro.id
 
                       return (
                         <div
                           key={miembro.id}
                           className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 flex flex-col justify-between space-y-3"
                         >
-                          <div className="space-y-2.5">
+                          <div className="space-y-3">
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex items-center space-x-2.5">
                                 <span className="text-2xl leading-none select-none">
@@ -2938,46 +2701,138 @@ export default function BotiquinAppClient({
                               </div>
                             </div>
 
-                            {/* Recent consumptions of this family member */}
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                                <span>
-                                  Consumos del botiquín ({consumosMiembro.length}) • Consultas IA (
-                                  {consultasMiembro.length})
+                            {/* Integrated History inside the Family Member Card */}
+                            <div className="pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedFamiliarHistoryId((prev) =>
+                                    prev === miembro.id ? null : miembro.id
+                                  )
+                                }}
+                                className={`w-full flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium ${
+                                  isHistoryExpanded ? greyBtnActive : greyBtn
+                                }`}
+                              >
+                                <span className="flex items-center space-x-2">
+                                  <History className="h-3.5 w-3.5 text-primary" />
+                                  <span>
+                                    Historial ({consultasMiembro.length} consultas •{' '}
+                                    {consumosMiembro.length} consumos)
+                                  </span>
                                 </span>
-                                {(consumosMiembro.length > 0 || consultasMiembro.length > 0) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setHistorialFilterFamiliarId(miembro.id)
-                                      setActiveTab('historial')
-                                    }}
-                                    className="text-primary hover:underline font-medium"
-                                  >
-                                    Ver historial
-                                  </button>
+                                {isHistoryExpanded ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
                                 )}
-                              </div>
+                              </button>
 
-                              {consumosMiembro.length > 0 && (
-                                <div className="space-y-1 pt-1">
-                                  {consumosMiembro.slice(0, 2).map((mov) => (
-                                    <div
-                                      key={mov.id}
-                                      className="rounded-lg bg-[#12151e] border border-[#262b38] px-2.5 py-1 text-[11px] flex items-center justify-between text-zinc-300"
+                              {isHistoryExpanded && (
+                                <div className="mt-2.5 rounded-xl border border-[#2c313f] bg-[#0e1016] p-3 space-y-2.5">
+                                  <div className="grid grid-cols-2 gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setFamiliarHistoryTab('consultas')}
+                                      className={`py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                                        familiarHistoryTab === 'consultas'
+                                          ? greyBtnActive
+                                          : greyBtn
+                                      }`}
                                     >
-                                      <span className="truncate">
-                                        {formatEspacioMedida(mov.medicamento_nombre)} (-
-                                        {mov.cantidad} {mov.unidad})
-                                      </span>
-                                      <span className="text-muted-foreground shrink-0 ml-2">
-                                        {new Date(mov.created_at).toLocaleDateString('es-AR', {
-                                          day: '2-digit',
-                                          month: '2-digit',
-                                        })}
-                                      </span>
+                                      Consultas IA ({consultasMiembro.length})
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setFamiliarHistoryTab('consumos')}
+                                      className={`py-1.5 px-2 rounded-lg text-xs font-semibold ${
+                                        familiarHistoryTab === 'consumos'
+                                          ? greyBtnActive
+                                          : greyBtn
+                                      }`}
+                                    >
+                                      Consumos ({consumosMiembro.length})
+                                    </button>
+                                  </div>
+
+                                  {familiarHistoryTab === 'consultas' ? (
+                                    consultasMiembro.length === 0 ? (
+                                      <p className="text-xs text-muted-foreground text-center py-3">
+                                        Sin consultas registradas para {miembro.nombre}.
+                                      </p>
+                                    ) : (
+                                      <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                                        {consultasMiembro.map((c) => (
+                                          <div
+                                            key={c.id}
+                                            className="rounded-lg border border-[#262b38] bg-[#141821] p-2.5 text-xs space-y-1.5"
+                                          >
+                                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                              <span>
+                                                {new Date(c.created_at).toLocaleDateString(
+                                                  'es-AR',
+                                                  {
+                                                    day: '2-digit',
+                                                    month: '2-digit',
+                                                    year: '2-digit',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit',
+                                                  }
+                                                )}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleDeleteConsultaHistorial(c.id)
+                                                }
+                                                className="text-zinc-400 hover:text-red-300"
+                                                title="Eliminar consulta"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </button>
+                                            </div>
+                                            <div className="font-semibold text-foreground">
+                                              “{c.consulta}”
+                                            </div>
+                                            <div className="text-zinc-300 leading-relaxed space-y-0.5">
+                                              {renderFormattedChatText(c.respuesta_markdown)}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )
+                                  ) : consumosMiembro.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground text-center py-3">
+                                      Sin consumos de medicamentos registrados para {miembro.nombre}.
+                                    </p>
+                                  ) : (
+                                    <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
+                                      {consumosMiembro.map((mov) => (
+                                        <div
+                                          key={mov.id}
+                                          className="rounded-lg border border-[#262b38] bg-[#141821] px-2.5 py-2 text-xs flex items-center justify-between gap-2"
+                                        >
+                                          <div className="min-w-0">
+                                            <div className="font-semibold text-foreground truncate">
+                                              {formatEspacioMedida(mov.medicamento_nombre)}{' '}
+                                              <span className="text-red-300">
+                                                (-{mov.cantidad} {mov.unidad})
+                                              </span>
+                                            </div>
+                                            <p className="text-[11px] text-muted-foreground truncate">
+                                              {mov.motivo}
+                                            </p>
+                                          </div>
+                                          <span className="text-[11px] text-muted-foreground shrink-0">
+                                            {new Date(mov.created_at).toLocaleDateString('es-AR', {
+                                              day: '2-digit',
+                                              month: '2-digit',
+                                            })}
+                                          </span>
+                                        </div>
+                                      ))}
                                     </div>
-                                  ))}
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -2991,40 +2846,147 @@ export default function BotiquinAppClient({
             )}
 
             {/* ------------------------------------------------------------- */}
-            {/* SUBSECCIÓN 4.2: ESENCIALES                                    */}
+            {/* SUBSECCIÓN 3.2: ESENCIALES (100% RESPONSIVE MOBILE + DESKTOP) */}
             {/* ------------------------------------------------------------- */}
             {configSubTab === 'esenciales' && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
-                  <div className="flex items-center space-x-2.5">
-                    <Star className="h-4 w-4 text-primary" />
+                {/* Header without 'Adaptar' button */}
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
+                  <div className="flex items-center space-x-2">
+                    <Star className="h-4 w-4 text-primary shrink-0" />
                     <h2 className="text-sm font-bold text-foreground">Esenciales</h2>
                     <span className="text-xs text-muted-foreground">
                       ({kpis.esencialesCubiertos} de {kpis.esencialesTotal} cubiertos)
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {(state.familia || []).length > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleSyncEsencialesFamilia}
-                        className={`shrink-0 flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${greyBtn}`}
-                        title="Adaptar catálogo según las fichas familiares"
-                      >
-                        <Sparkles className="h-3.5 w-3.5 text-primary" />
-                        <span>Adaptar</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={openNewEsencialModal}
-                      className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
-                    >
-                      <span>+ Esencial</span>
-                    </button>
-                  </div>
+                  <button
+                    onClick={openNewEsencialModal}
+                    className={`shrink-0 flex items-center justify-center rounded-lg px-3.5 py-1.5 text-xs font-semibold hover:bg-zinc-600 ${greyBtnActive}`}
+                  >
+                    <span>+ Esencial</span>
+                  </button>
                 </div>
 
-                <div className="rounded-xl border border-[#323846] bg-[#171a22] overflow-hidden">
+                {/* MOBILE & SMALL SCREENS VIEW (Clean responsive cards, zero overlapping) */}
+                <div className="md:hidden space-y-2.5">
+                  {sortedEsenciales.map((esc) => {
+                    const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
+                      esc,
+                      state.medicamentos
+                    )
+                    return (
+                      <div
+                        key={esc.id}
+                        className={`rounded-xl border border-[#323846] bg-[#171a22] p-3.5 space-y-2 ${
+                          !esc.activo ? 'opacity-50' : ''
+                        }`}
+                      >
+                        {/* Row 1: Category Tag + Público Emoji + Action Buttons */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center flex-wrap gap-2 min-w-0">
+                            <span
+                              className={`inline-block rounded-xl px-2.5 py-1 text-xs font-semibold leading-snug break-words ${
+                                cubierto
+                                  ? 'bg-zinc-700 text-white border border-zinc-400'
+                                  : 'bg-primary/15 border border-primary/40 text-primary'
+                              }`}
+                            >
+                              {formatCategoriaEsencial(esc)}
+                            </span>
+                            <span
+                              className="text-lg leading-none select-none shrink-0"
+                              title={
+                                esc.publico === 'pediatrico'
+                                  ? 'Bebé / Pediátrico'
+                                  : esc.publico === 'ambos'
+                                  ? 'Familia'
+                                  : 'Adultos'
+                              }
+                            >
+                              {esc.publico === 'pediatrico'
+                                ? '👶'
+                                : esc.publico === 'ambos'
+                                ? '👨‍👩‍👧'
+                                : '🧑'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openNewMedModal({
+                                  nombre: esc.nombre,
+                                  droga: esc.droga_sugerida,
+                                  publico: esc.publico,
+                                  categoria: esc.categoria,
+                                  unidad: esc.unidad_sugerida,
+                                  cantidad_actual:
+                                    esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                  cantidad_inicial:
+                                    esc.unidad_sugerida === 'ml' ? 100 : 10,
+                                  es_esencial: true,
+                                  esencial_id: esc.id,
+                                })
+                              }
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="+ Stock"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openEditEsencialModal(esc)}
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="Editar"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteEsencial(esc.id, esc.nombre)}
+                              className={`p-1.5 rounded-lg ${greyBtn}`}
+                              title="Eliminar"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Row 2: Principal Activo & Síntomas */}
+                        <div className="text-xs space-y-1 pt-0.5">
+                          <div>
+                            <span className="text-muted-foreground">Activo:</span>{' '}
+                            <strong className="text-zinc-100">
+                              {formatPrincipalActivoEsencial(esc)}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Síntomas:</span>{' '}
+                            <span className="text-zinc-300">{formatSintomasEsencial(esc)}</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Marcas:</span>{' '}
+                            <span className="text-zinc-300">{formatMarcasSugeridas(esc)}</span>
+                          </div>
+                          {cubierto && medicamentosQueCubren.length > 0 && (
+                            <div className="text-[11px] text-emerald-300/90 pt-0.5">
+                              ✓ En stock:{' '}
+                              {medicamentosQueCubren
+                                .map((m) => formatEspacioMedida(m.nombre))
+                                .join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* DESKTOP TABLE VIEW */}
+                <div className="hidden md:block rounded-xl border border-[#323846] bg-[#171a22] overflow-hidden">
                   <table className="w-full table-fixed text-left border-collapse">
                     <thead>
                       <tr className="border-b border-[#2c313f] bg-[#12151c] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -3171,7 +3133,7 @@ export default function BotiquinAppClient({
             )}
 
             {/* ------------------------------------------------------------- */}
-            {/* SUBSECCIÓN 4.3: ALERTAS                                       */}
+            {/* SUBSECCIÓN 3.3: ALERTAS                                       */}
             {/* ------------------------------------------------------------- */}
             {configSubTab === 'alertas' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
@@ -3334,49 +3296,38 @@ export default function BotiquinAppClient({
         )}
       </main>
 
-      {/* Mobile Bottom Navigation Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 grid grid-cols-4 gap-1">
+      {/* Mobile Bottom Navigation Bar (3 main sections, compact in landscape) */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 landscape:py-1 grid grid-cols-3 gap-1">
         <a
           href="/?tab=stock"
           onClick={(e) => handleTabNavClick(e, 'stock')}
-          className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
+          className={`flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
             activeTab === 'stock' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Package className="h-5 w-5 mb-0.5" />
+          <Package className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
           <span>Stock</span>
         </a>
 
         <a
           href="/?tab=consulta"
           onClick={(e) => handleTabNavClick(e, 'consulta')}
-          className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
+          className={`flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
             activeTab === 'consulta' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Bot className="h-5 w-5 mb-0.5" />
+          <Bot className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
           <span>Consultorio IA</span>
         </a>
 
         <a
-          href="/?tab=historial"
-          onClick={(e) => handleTabNavClick(e, 'historial')}
-          className={`flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
-            activeTab === 'historial' ? 'text-primary' : 'text-muted-foreground'
-          }`}
-        >
-          <History className="h-5 w-5 mb-0.5" />
-          <span>Historial</span>
-        </a>
-
-        <a
-          href="/?tab=configuracion"
-          onClick={(e) => handleTabNavClick(e, 'configuracion')}
-          className={`relative flex flex-col items-center justify-center py-1.5 rounded-lg text-[11px] font-medium ${
+          href={`/?tab=configuracion&sub=${configSubTab}`}
+          onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
+          className={`relative flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
             activeTab === 'configuracion' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Settings className="h-5 w-5 mb-0.5" />
+          <Settings className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
           <span>Configuración</span>
         </a>
       </div>
@@ -3387,11 +3338,11 @@ export default function BotiquinAppClient({
       {familiarModalOpen && (
         <div
           onClick={() => setFamiliarModalOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
@@ -3415,7 +3366,7 @@ export default function BotiquinAppClient({
                   required
                   value={familiarForm.nombre}
                   onChange={(e) => setFamiliarForm({ ...familiarForm, nombre: e.target.value })}
-                  placeholder="Ej: Bauti, Lucía, Agustín"
+                  placeholder="Ej: Bauti, Marisol, Agustín"
                   className="w-full rounded-lg border border-[#383f4e] bg-[#13161f] px-3 py-1.5 text-sm text-foreground"
                 />
               </div>
@@ -3516,11 +3467,11 @@ export default function BotiquinAppClient({
       {medModalOpen && (
         <div
           onClick={() => setMedModalOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
@@ -3944,16 +3895,16 @@ export default function BotiquinAppClient({
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL: DESCONTAR DOSIS USADA (WITH FAMILY MEMBER SELECTOR)            */}
+      {/* MODAL: DESCONTAR DOSIS USADA                                          */}
       {/* ===================================================================== */}
       {dosisModalMed && (
         <div
           onClick={() => setDosisModalMed(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
@@ -4085,11 +4036,11 @@ export default function BotiquinAppClient({
       {reponerModalMed && (
         <div
           onClick={() => setReponerModalMed(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">
@@ -4158,11 +4109,11 @@ export default function BotiquinAppClient({
       {bajaModalMed && (
         <div
           onClick={() => setBajaModalMed(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-red-300">
@@ -4242,11 +4193,11 @@ export default function BotiquinAppClient({
       {esencialModalOpen && (
         <div
           onClick={() => setEsencialModalOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg rounded-2xl border border-[#4a5264] bg-[#232733] p-6 shadow-2xl ring-1 ring-white/10"
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
           >
             <div className="flex items-center justify-between pb-3 border-b border-[#383f4e]">
               <h3 className="text-base font-bold text-foreground">

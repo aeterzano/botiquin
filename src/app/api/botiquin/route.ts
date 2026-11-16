@@ -580,12 +580,25 @@ export async function POST(req: NextRequest) {
         state.familia.push(miembro)
       }
 
-      // Automatically adapt the Esenciales catalog to cover the family member's needs
-      const { nuevos, listaActualizada } = generarEsencialesSegunFamilia(
-        state.familia,
-        state.esenciales
-      )
+      // Automatically adapt the Esenciales catalog to cover the family member's needs and match existing stock
+      const {
+        nuevos,
+        listaActualizada,
+        idsEliminadosPorDuplicado,
+        medicamentosActualizados,
+      } = generarEsencialesSegunFamilia(state.familia, state.esenciales, state.medicamentos)
       state.esenciales = listaActualizada
+      state.medicamentos = medicamentosActualizados
+
+      if (idsEliminadosPorDuplicado.length > 0) {
+        try {
+          const { createAdminClient } = await import('@/utils/supabase/admin')
+          const admin = createAdminClient()
+          await admin.from(TABLE_ESENCIALES).delete().in('id', idsEliminadosPorDuplicado)
+        } catch {
+          // ignore
+        }
+      }
 
       await saveBotiquinState(state)
       return NextResponse.json({
@@ -616,18 +629,35 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'sync_esenciales_familia') {
-      const { nuevos, listaActualizada } = generarEsencialesSegunFamilia(
+      const {
+        nuevos,
+        listaActualizada,
+        idsEliminadosPorDuplicado,
+        medicamentosActualizados,
+      } = generarEsencialesSegunFamilia(
         state.familia || [],
-        state.esenciales
+        state.esenciales,
+        state.medicamentos
       )
       state.esenciales = listaActualizada
+      state.medicamentos = medicamentosActualizados
+
+      if (idsEliminadosPorDuplicado.length > 0) {
+        try {
+          const { createAdminClient } = await import('@/utils/supabase/admin')
+          const admin = createAdminClient()
+          await admin.from(TABLE_ESENCIALES).delete().in('id', idsEliminadosPorDuplicado)
+        } catch {
+          // ignore
+        }
+      }
+
       await saveBotiquinState(state)
-      const updatedState = await loadBotiquinState()
       return NextResponse.json({
         ok: true,
         nuevosEsencialesCount: nuevos.length,
-        state: updatedState,
-        alertasActivas: calcularAlertasActivas(updatedState),
+        state,
+        alertasActivas: calcularAlertasActivas(state),
       })
     }
 

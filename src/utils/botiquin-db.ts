@@ -7,6 +7,7 @@ import {
   BotiquinConfig,
   BotiquinState,
   ConsultaHistorialItem,
+  generarEsencialesSegunFamilia,
   Medicamento,
   MiembroFamilia,
   MovimientoStock,
@@ -301,6 +302,18 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
         initPromises.push(
           supabase.from(TABLE_ESENCIALES).upsert(DEFAULT_ESENCIALES, { onConflict: 'id' })
         )
+      } else {
+        const deduped = generarEsencialesSegunFamilia(familia, esenciales, medicamentos)
+        esenciales = deduped.listaActualizada
+        medicamentos = deduped.medicamentosActualizados
+        if (deduped.idsEliminadosPorDuplicado.length > 0) {
+          initPromises.push(
+            supabase
+              .from(TABLE_ESENCIALES)
+              .delete()
+              .in('id', deduped.idsEliminadosPorDuplicado)
+          )
+        }
       }
       if (!config) {
         config = DEFAULT_CONFIG
