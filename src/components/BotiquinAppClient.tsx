@@ -535,6 +535,20 @@ export default function BotiquinAppClient({
     })
   }, [state.esenciales])
 
+  // Helper to get clean canonical URL for each section/subsection
+  function getSectionUrl(tab: TabType, sub?: string): string {
+    if (tab === 'consulta') return '/consultorio'
+    if (tab === 'viaje') {
+      const targetSub = sub || viajeSubTab
+      return targetSub === 'valija' ? '/viaje' : `/viaje?sub=${targetSub}`
+    }
+    if (tab === 'configuracion') {
+      const targetSub = sub || configSubTab
+      return targetSub === 'familia' ? '/configuracion' : `/configuracion?sub=${targetSub}`
+    }
+    return '/stock'
+  }
+
   // Helper to change section/subsection and persist in URL + localStorage so refreshing stays in the exact same view
   function navigateToSection(tab: TabType, sub?: string) {
     setActiveTab(tab)
@@ -556,21 +570,19 @@ export default function BotiquinAppClient({
       } catch {
         // ignore
       }
-      const url =
-        tab === 'stock'
-          ? '/?tab=stock'
-          : tab === 'configuracion'
-          ? `/?tab=configuracion&sub=${sub || configSubTab}`
-          : tab === 'viaje'
-          ? `/?tab=viaje&sub=${sub || viajeSubTab}`
-          : `/?tab=${tab}`
-      window.history.pushState(null, '', url)
+
+      const url = getSectionUrl(tab, sub)
+      const currentFullPath = window.location.pathname + window.location.search
+      if (currentFullPath !== url) {
+        window.history.pushState(null, '', url)
+      }
     }
   }
 
   // Restore exact section and subsection on mount / refresh / popstate
   useEffect(() => {
     function syncTabFromUrlOrStorage() {
+      const pathname = window.location.pathname.toLowerCase()
       const params = new URLSearchParams(window.location.search)
       const tabParam = params.get('tab')
       const subParam = params.get('sub')
@@ -579,28 +591,67 @@ export default function BotiquinAppClient({
       let resolvedSub: ConfigSubTab | null = null
       let resolvedViajeSub: ViajeSubTab | null = null
 
-      if (tabParam === 'stock' || tabParam === 'consulta') {
-        resolvedTab = tabParam
-      } else if (tabParam === 'viaje') {
+      // 1. Check clean pathname first (/viaje, /consultorio, /configuracion, /stock)
+      if (pathname.startsWith('/viaje')) {
         resolvedTab = 'viaje'
-        if (subParam === 'valija' || subParam === 'clima' || subParam === 'notas') {
-          resolvedViajeSub = subParam
+        if (pathname.includes('/clima') || subParam === 'clima') {
+          resolvedViajeSub = 'clima'
+        } else if (pathname.includes('/notas') || subParam === 'notas') {
+          resolvedViajeSub = 'notas'
+        } else if (pathname.includes('/valija') || subParam === 'valija') {
+          resolvedViajeSub = 'valija'
         }
-      } else if (tabParam === 'configuracion' || tabParam === 'historial') {
+      } else if (pathname.startsWith('/consultorio') || pathname.startsWith('/consulta')) {
+        resolvedTab = 'consulta'
+      } else if (pathname.startsWith('/configuracion')) {
         resolvedTab = 'configuracion'
-        if (subParam === 'familia' || subParam === 'esenciales' || subParam === 'alertas') {
-          resolvedSub = subParam
-        } else {
+        if (pathname.includes('/esenciales') || subParam === 'esenciales') {
+          resolvedSub = 'esenciales'
+        } else if (pathname.includes('/alertas') || subParam === 'alertas') {
+          resolvedSub = 'alertas'
+        } else if (pathname.includes('/familia') || subParam === 'familia') {
           resolvedSub = 'familia'
         }
-      } else if (tabParam === 'esenciales') {
+      } else if (pathname.startsWith('/stock')) {
+        resolvedTab = 'stock'
+      } else if (pathname.startsWith('/esenciales')) {
         resolvedTab = 'configuracion'
         resolvedSub = 'esenciales'
-      } else if (tabParam === 'alertas') {
+      } else if (pathname.startsWith('/alertas')) {
         resolvedTab = 'configuracion'
         resolvedSub = 'alertas'
-      } else {
-        // Fallback to localStorage if URL had no ?tab= parameter on refresh
+      } else if (pathname.startsWith('/historial')) {
+        resolvedTab = 'configuracion'
+        resolvedSub = 'familia'
+      }
+
+      // 2. Fallback to legacy ?tab= query parameter for backward compatibility
+      if (!resolvedTab && tabParam) {
+        if (tabParam === 'stock' || tabParam === 'consulta') {
+          resolvedTab = tabParam
+        } else if (tabParam === 'viaje') {
+          resolvedTab = 'viaje'
+          if (subParam === 'valija' || subParam === 'clima' || subParam === 'notas') {
+            resolvedViajeSub = subParam
+          }
+        } else if (tabParam === 'configuracion' || tabParam === 'historial') {
+          resolvedTab = 'configuracion'
+          if (subParam === 'familia' || subParam === 'esenciales' || subParam === 'alertas') {
+            resolvedSub = subParam
+          } else {
+            resolvedSub = 'familia'
+          }
+        } else if (tabParam === 'esenciales') {
+          resolvedTab = 'configuracion'
+          resolvedSub = 'esenciales'
+        } else if (tabParam === 'alertas') {
+          resolvedTab = 'configuracion'
+          resolvedSub = 'alertas'
+        }
+      }
+
+      // 3. Fallback to localStorage if accessed at root '/' or '/dashboard' without a section in URL
+      if (!resolvedTab) {
         try {
           const savedTab = window.localStorage.getItem('botiquin_active_tab')
           const savedSub = window.localStorage.getItem('botiquin_config_subtab')
@@ -640,16 +691,16 @@ export default function BotiquinAppClient({
         // ignore
       }
 
-      const expectedUrl =
-        finalTab === 'stock'
-          ? '/?tab=stock'
-          : finalTab === 'configuracion'
-          ? `/?tab=configuracion&sub=${finalSub}`
-          : finalTab === 'viaje'
-          ? `/?tab=viaje&sub=${finalViajeSub}`
-          : `/?tab=${finalTab}`
+      const expectedUrl = getSectionUrl(finalTab, finalTab === 'viaje' ? finalViajeSub : finalSub)
+      const currentFullPath = window.location.pathname + window.location.search
 
-      if (window.location.search !== expectedUrl.replace('/', '')) {
+      // Keep URL clean and updated if arrived from legacy ?tab= or root /
+      if (
+        currentFullPath !== expectedUrl &&
+        (window.location.search.includes('tab=') ||
+          window.location.pathname === '/' ||
+          window.location.pathname === '/dashboard')
+      ) {
         window.history.replaceState(null, '', expectedUrl)
       }
     }
@@ -1882,7 +1933,7 @@ export default function BotiquinAppClient({
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <div className="flex items-center space-x-8">
             <a
-              href="/?tab=stock"
+              href="/stock"
               onClick={(e) => handleTabNavClick(e, 'stock')}
               className="flex items-center space-x-3 text-left"
             >
@@ -1897,7 +1948,7 @@ export default function BotiquinAppClient({
             {/* Desktop Nav Links: Stock | Consultorio IA | Configuración */}
             <div className="hidden lg:flex items-center space-x-2">
               <a
-                href="/?tab=stock"
+                href="/stock"
                 onClick={(e) => handleTabNavClick(e, 'stock')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'stock'
@@ -1910,7 +1961,7 @@ export default function BotiquinAppClient({
               </a>
 
               <a
-                href="/?tab=consulta"
+                href="/consultorio"
                 onClick={(e) => handleTabNavClick(e, 'consulta')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'consulta'
@@ -1923,7 +1974,7 @@ export default function BotiquinAppClient({
               </a>
 
               <a
-                href="/?tab=viaje"
+                href="/viaje"
                 onClick={(e) => handleTabNavClick(e, 'viaje')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'viaje'
@@ -1936,7 +1987,7 @@ export default function BotiquinAppClient({
               </a>
 
               <a
-                href={`/?tab=configuracion&sub=${configSubTab}`}
+                href="/configuracion"
                 onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
                   activeTab === 'configuracion'
@@ -1991,7 +2042,7 @@ export default function BotiquinAppClient({
         {mobileMenuOpen && (
           <div className="lg:hidden border-t border-[#383e4e] mt-2.5 pt-2.5 pb-2 flex flex-col space-y-1.5 max-h-[75dvh] overflow-y-auto">
             <a
-              href="/?tab=stock"
+              href="/stock"
               onClick={(e) => handleTabNavClick(e, 'stock')}
               className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
                 activeTab === 'stock'
@@ -2004,7 +2055,7 @@ export default function BotiquinAppClient({
             </a>
 
             <a
-              href="/?tab=consulta"
+              href="/consultorio"
               onClick={(e) => handleTabNavClick(e, 'consulta')}
               className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
                 activeTab === 'consulta'
@@ -2017,7 +2068,7 @@ export default function BotiquinAppClient({
             </a>
 
             <a
-              href="/?tab=viaje"
+              href="/viaje"
               onClick={(e) => handleTabNavClick(e, 'viaje')}
               className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
                 activeTab === 'viaje'
@@ -2030,7 +2081,7 @@ export default function BotiquinAppClient({
             </a>
 
             <a
-              href={`/?tab=configuracion&sub=${configSubTab}`}
+              href="/configuracion"
               onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
               className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
                 activeTab === 'configuracion'
@@ -3720,7 +3771,7 @@ export default function BotiquinAppClient({
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
               <div className="flex items-center flex-wrap gap-2">
                 <a
-                  href="/?tab=configuracion&sub=familia"
+                  href="/configuracion"
                   onClick={(e) => handleTabNavClick(e, 'configuracion', 'familia')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'familia' ? greyBtnActive : greyBtn
@@ -3731,7 +3782,7 @@ export default function BotiquinAppClient({
                 </a>
 
                 <a
-                  href="/?tab=configuracion&sub=esenciales"
+                  href="/configuracion?sub=esenciales"
                   onClick={(e) => handleTabNavClick(e, 'configuracion', 'esenciales')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'esenciales' ? greyBtnActive : greyBtn
@@ -3742,7 +3793,7 @@ export default function BotiquinAppClient({
                 </a>
 
                 <a
-                  href="/?tab=configuracion&sub=alertas"
+                  href="/configuracion?sub=alertas"
                   onClick={(e) => handleTabNavClick(e, 'configuracion', 'alertas')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold ${
                     configSubTab === 'alertas' ? greyBtnActive : greyBtn
@@ -4504,7 +4555,7 @@ export default function BotiquinAppClient({
       {/* Mobile Bottom Navigation Bar (hidden in landscape to keep horizontal screen clean with hamburger menu) */}
       <div className="md:hidden landscape:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-1.5 py-1.5 grid grid-cols-4 gap-1">
         <a
-          href="/?tab=stock"
+          href="/stock"
           onClick={(e) => handleTabNavClick(e, 'stock')}
           className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'stock' ? 'text-primary' : 'text-muted-foreground'
@@ -4515,7 +4566,7 @@ export default function BotiquinAppClient({
         </a>
 
         <a
-          href="/?tab=consulta"
+          href="/consultorio"
           onClick={(e) => handleTabNavClick(e, 'consulta')}
           className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'consulta' ? 'text-primary' : 'text-muted-foreground'
@@ -4526,7 +4577,7 @@ export default function BotiquinAppClient({
         </a>
 
         <a
-          href="/?tab=viaje"
+          href="/viaje"
           onClick={(e) => handleTabNavClick(e, 'viaje')}
           className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'viaje' ? 'text-primary' : 'text-muted-foreground'
@@ -4537,7 +4588,7 @@ export default function BotiquinAppClient({
         </a>
 
         <a
-          href={`/?tab=configuracion&sub=${configSubTab}`}
+          href="/configuracion"
           onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
           className={`relative flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'configuracion' ? 'text-primary' : 'text-muted-foreground'
