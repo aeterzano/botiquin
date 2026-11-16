@@ -6,12 +6,22 @@ import {
   AlertaLog,
   BotiquinConfig,
   BotiquinState,
+  ConsultaHistorialItem,
   Medicamento,
+  MiembroFamilia,
   MovimientoStock,
   ProductoEsencial,
 } from './botiquin-types'
 
 export * from './botiquin-types'
+
+export const TABLE_STOCK = 'botiquin-stock'
+export const TABLE_FAMILIARES = 'botiquin-familiares'
+export const TABLE_ESENCIALES = 'botiquin-esenciales'
+export const TABLE_MOVIMIENTOS = 'botiquin-movimientos'
+export const TABLE_HISTORIAL = 'botiquin-historial'
+export const TABLE_ALERTAS = 'botiquin-alertas'
+export const TABLE_CONFIG = 'botiquin-config'
 
 export const DEFAULT_ESENCIALES: ProductoEsencial[] = [
   {
@@ -173,78 +183,135 @@ async function ensureBucketExists() {
   }
 }
 
+async function loadStorageBackupState(): Promise<Partial<BotiquinState> | null> {
+  const supabase = createAdminClient()
+  try {
+    const { data, error } = await supabase.storage.from(BUCKET_NAME).download(STORAGE_STATE_PATH)
+    if (!error && data) {
+      const text = await data.text()
+      return JSON.parse(text) as Partial<BotiquinState>
+    }
+  } catch {
+    // ignore
+  }
+
+  if (fs.existsSync(LOCAL_STATE_FILE)) {
+    try {
+      const raw = fs.readFileSync(LOCAL_STATE_FILE, 'utf8')
+      return JSON.parse(raw) as Partial<BotiquinState>
+    } catch {
+      // ignore
+    }
+  }
+
+  return null
+}
+
 export async function loadBotiquinState(): Promise<BotiquinState> {
   const supabase = createAdminClient()
 
   try {
     const { data: meds, error: medsError } = await supabase
-      .from('botiquin_medicamentos')
+      .from(TABLE_STOCK)
       .select('*')
       .order('created_at', { ascending: false })
 
     if (!medsError && meds !== null) {
-      const [escRes, movRes, cfgRes, logRes] = await Promise.all([
-        supabase.from('botiquin_esenciales').select('*').order('nombre', { ascending: true }),
+      const [famRes, escRes, movRes, histRes, cfgRes, logRes] = await Promise.all([
+        supabase.from(TABLE_FAMILIARES).select('*').order('created_at', { ascending: true }),
+        supabase.from(TABLE_ESENCIALES).select('*').order('nombre', { ascending: true }),
         supabase
-          .from('botiquin_movimientos')
+          .from(TABLE_MOVIMIENTOS)
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(200),
-        supabase.from('botiquin_config').select('*').eq('id', 'default').maybeSingle(),
+          .limit(300),
         supabase
-          .from('botiquin_alertas_log')
+          .from(TABLE_HISTORIAL)
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(300),
+        supabase.from(TABLE_CONFIG).select('*').eq('id', 'default').maybeSingle(),
+        supabase
+          .from(TABLE_ALERTAS)
           .select('*')
           .order('created_at', { ascending: false })
           .limit(100),
       ])
 
+      let medicamentos = (meds as Medicamento[]).map(normalizeMedicamento)
+      let familia = (famRes.data as MiembroFamilia[]) || []
       let esenciales = (escRes.data as ProductoEsencial[]) || []
+      let movimientos = (movRes.data as MovimientoStock[]) || []
+      let consultas_historial = (histRes.data as ConsultaHistorialItem[]) || []
+      let config = (cfgRes.data as BotiquinConfig) || null
+      let alertas_log = (logRes.data as AlertaLog[]) || []
+
+      // Automatic one-time migration from Storage backup if the SQL tables were just created empty
+      if (
+        medicamentos.length === 0 &&
+        familia.length === 0 &&
+        movimientos.length === 0 &&
+        esenciales.length === 0
+      ) {
+        const backup = await loadStorageBackupState()
+        if (backup) {
+          medicamentos = (backup.medicamentos || []).map(normalizeMedicamento)
+          familia = backup.familia || []
+          esenciales =
+            backup.esenciales && backup.esenciales.length > 0
+              ? backup.esenciales
+              : DEFAULT_ESENCIALES
+          movimientos = backup.movimientos || []
+          consultas_historial = backup.consultas_historial || []
+          config = { ...DEFAULT_CONFIG, ...(backup.config || {}) }
+          alertas_log = backup.alertas_log || []
+
+          const migratedState: BotiquinState = {
+            medicamentos,
+            familia,
+            esenciales,
+            movimientos,
+            consultas_historial,
+            config,
+            alertas_log,
+          }
+          await syncSqlTables(migratedState)
+          saveLocalMirror(migratedState)
+          return migratedState
+        }
+      }
+
       if (esenciales.length === 0) {
         esenciales = DEFAULT_ESENCIALES
-        await supabase.from('botiquin_esenciales').upsert(DEFAULT_ESENCIALES)
+        await supabase.from(TABLE_ESENCIALES).upsert(DEFAULT_ESENCIALES, { onConflict: 'id' })
       }
 
-      let config = (cfgRes.data as BotiquinConfig) || null
       if (!config) {
         config = DEFAULT_CONFIG
-        await supabase.from('botiquin_config').upsert(DEFAULT_CONFIG)
-      }
-
-      let storageExtras: Partial<BotiquinState> = {}
-      try {
-        const { data: stData } = await supabase.storage
-          .from(BUCKET_NAME)
-          .download(STORAGE_STATE_PATH)
-        if (stData) {
-          storageExtras = JSON.parse(await stData.text())
-        }
-      } catch {
-        // ignore
+        await supabase.from(TABLE_CONFIG).upsert(DEFAULT_CONFIG, { onConflict: 'id' })
       }
 
       const state: BotiquinState = {
-        medicamentos: (meds as Medicamento[]).map(normalizeMedicamento),
+        medicamentos,
         esenciales,
-        movimientos: (movRes.data as MovimientoStock[]) || [],
+        movimientos,
         config,
-        alertas_log: (logRes.data as AlertaLog[]) || [],
-        familia: storageExtras.familia || [],
-        consultas_historial: storageExtras.consultas_historial || [],
+        alertas_log,
+        familia,
+        consultas_historial,
       }
 
       saveLocalMirror(state)
       return state
     }
   } catch {
-    // SQL tables not created yet
+    // SQL tables not created yet -> fallback to Storage JSON
   }
 
   try {
     await ensureBucketExists()
-    const { data, error } = await supabase.storage.from(BUCKET_NAME).download(STORAGE_STATE_PATH)
-    if (!error && data) {
-      const text = await data.text()
-      const parsed = JSON.parse(text) as Partial<BotiquinState>
+    const parsed = await loadStorageBackupState()
+    if (parsed) {
       const state: BotiquinState = {
         medicamentos: (parsed.medicamentos || []).map(normalizeMedicamento),
         esenciales:
@@ -262,27 +329,6 @@ export async function loadBotiquinState(): Promise<BotiquinState> {
     }
   } catch (e) {
     console.warn('Fallback to local mirror while loading state:', e)
-  }
-
-  if (fs.existsSync(LOCAL_STATE_FILE)) {
-    try {
-      const raw = fs.readFileSync(LOCAL_STATE_FILE, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<BotiquinState>
-      return {
-        medicamentos: (parsed.medicamentos || []).map(normalizeMedicamento),
-        esenciales:
-          parsed.esenciales && parsed.esenciales.length > 0
-            ? parsed.esenciales
-            : DEFAULT_ESENCIALES,
-        movimientos: parsed.movimientos || [],
-        config: { ...DEFAULT_CONFIG, ...(parsed.config || {}) },
-        alertas_log: parsed.alertas_log || [],
-        familia: parsed.familia || [],
-        consultas_historial: parsed.consultas_historial || [],
-      }
-    } catch {
-      // ignore
-    }
   }
 
   const initial = getInitialState()
@@ -319,6 +365,44 @@ function saveLocalMirror(state: BotiquinState) {
   }
 }
 
+async function syncSqlTables(state: BotiquinState): Promise<void> {
+  const supabase = createAdminClient()
+  try {
+    const { error: checkErr } = await supabase
+      .from(TABLE_CONFIG)
+      .upsert(state.config, { onConflict: 'id' })
+
+    if (!checkErr) {
+      if (state.medicamentos.length > 0) {
+        await supabase.from(TABLE_STOCK).upsert(state.medicamentos, { onConflict: 'id' })
+      }
+      if ((state.familia || []).length > 0) {
+        await supabase.from(TABLE_FAMILIARES).upsert(state.familia, { onConflict: 'id' })
+      }
+      if (state.esenciales.length > 0) {
+        await supabase.from(TABLE_ESENCIALES).upsert(state.esenciales, { onConflict: 'id' })
+      }
+      if (state.movimientos.length > 0) {
+        await supabase
+          .from(TABLE_MOVIMIENTOS)
+          .upsert(state.movimientos.slice(0, 100), { onConflict: 'id' })
+      }
+      if ((state.consultas_historial || []).length > 0) {
+        await supabase
+          .from(TABLE_HISTORIAL)
+          .upsert(state.consultas_historial.slice(0, 100), { onConflict: 'id' })
+      }
+      if (state.alertas_log.length > 0) {
+        await supabase
+          .from(TABLE_ALERTAS)
+          .upsert(state.alertas_log.slice(0, 100), { onConflict: 'id' })
+      }
+    }
+  } catch {
+    // SQL tables not created yet
+  }
+}
+
 export async function saveBotiquinState(state: BotiquinState): Promise<void> {
   saveLocalMirror(state)
 
@@ -335,31 +419,7 @@ export async function saveBotiquinState(state: BotiquinState): Promise<void> {
     console.error('Error saving state to Supabase Storage:', e)
   }
 
-  try {
-    const { error: checkErr } = await supabase
-      .from('botiquin_config')
-      .upsert(state.config, { onConflict: 'id' })
-    if (!checkErr) {
-      if (state.medicamentos.length > 0) {
-        await supabase.from('botiquin_medicamentos').upsert(state.medicamentos, { onConflict: 'id' })
-      }
-      if (state.esenciales.length > 0) {
-        await supabase.from('botiquin_esenciales').upsert(state.esenciales, { onConflict: 'id' })
-      }
-      if (state.movimientos.length > 0) {
-        await supabase
-          .from('botiquin_movimientos')
-          .upsert(state.movimientos.slice(0, 50), { onConflict: 'id' })
-      }
-      if (state.alertas_log.length > 0) {
-        await supabase
-          .from('botiquin_alertas_log')
-          .upsert(state.alertas_log.slice(0, 50), { onConflict: 'id' })
-      }
-    }
-  } catch {
-    // SQL tables not created yet
-  }
+  await syncSqlTables(state)
 }
 
 export async function uploadMedicationPhoto(

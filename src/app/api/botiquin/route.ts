@@ -13,6 +13,10 @@ import {
   ProductoEsencial,
   PublicoObjetivo,
   saveBotiquinState,
+  TABLE_ESENCIALES,
+  TABLE_FAMILIARES,
+  TABLE_HISTORIAL,
+  TABLE_STOCK,
   UnidadMedida,
   uploadMedicationPhoto,
 } from '@/utils/botiquin-db'
@@ -424,7 +428,7 @@ export async function POST(req: NextRequest) {
       try {
         const { createAdminClient } = await import('@/utils/supabase/admin')
         const admin = createAdminClient()
-        await admin.from('botiquin_medicamentos').delete().eq('id', id)
+        await admin.from(TABLE_STOCK).delete().eq('id', id)
       } catch {
         // ignore if SQL table does not exist
       }
@@ -496,7 +500,7 @@ export async function POST(req: NextRequest) {
       try {
         const { createAdminClient } = await import('@/utils/supabase/admin')
         const admin = createAdminClient()
-        await admin.from('botiquin_esenciales').delete().eq('id', id)
+        await admin.from(TABLE_ESENCIALES).delete().eq('id', id)
       } catch {
         // ignore
       }
@@ -605,6 +609,13 @@ export async function POST(req: NextRequest) {
     if (action === 'delete_familiar') {
       const { id } = body
       state.familia = (state.familia || []).filter((f) => f.id !== id)
+      try {
+        const { createAdminClient } = await import('@/utils/supabase/admin')
+        const admin = createAdminClient()
+        await admin.from(TABLE_FAMILIARES).delete().eq('id', id)
+      } catch {
+        // ignore
+      }
       await saveBotiquinState(state)
       const updatedState = await loadBotiquinState()
       return NextResponse.json({
@@ -633,6 +644,13 @@ export async function POST(req: NextRequest) {
     if (action === 'delete_consulta_historial') {
       const { id } = body
       state.consultas_historial = (state.consultas_historial || []).filter((c) => c.id !== id)
+      try {
+        const { createAdminClient } = await import('@/utils/supabase/admin')
+        const admin = createAdminClient()
+        await admin.from(TABLE_HISTORIAL).delete().eq('id', id)
+      } catch {
+        // ignore
+      }
       await saveBotiquinState(state)
       const updatedState = await loadBotiquinState()
       return NextResponse.json({

@@ -1,97 +1,114 @@
 -- ============================================================================
--- BOTIQUÍN VIRTUAL - ESQUEMA DE BASE DE DATOS SUPABASE
--- Ejecutá este script en el SQL Editor de tu proyecto Supabase para crear
--- las tablas relacionales (además de la sincronización automática en Storage).
+-- ESQUEMA DE TABLAS PARA SUPABASE (TABLE EDITOR) - BOTIQUÍN VIRTUAL
+-- Todas las tablas comienzan con el prefijo "botiquin-" para diferenciarlas
+-- fácilmente de las tablas de Gastos e Inversiones.
 -- ============================================================================
 
--- 1. Tabla de Medicamentos del Stock
-CREATE TABLE IF NOT EXISTS public.botiquin_medicamentos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  nombre TEXT NOT NULL,
-  droga TEXT NOT NULL DEFAULT '',
-  concentracion TEXT NOT NULL DEFAULT '',
-  publico TEXT NOT NULL DEFAULT 'adulto', -- 'adulto' | 'pediatrico' | 'ambos'
-  categoria TEXT NOT NULL DEFAULT 'General',
-  unidad TEXT NOT NULL DEFAULT 'comprimidos', -- 'comprimidos' | 'ml' | 'gotas' | 'sobres' | 'ampollas' | 'g' | 'unidades'
-  cantidad_actual NUMERIC NOT NULL DEFAULT 0,
-  cantidad_inicial NUMERIC NOT NULL DEFAULT 0,
-  stock_minimo NUMERIC NOT NULL DEFAULT 0,
-  fecha_vencimiento DATE,
-  para_que_sirve TEXT NOT NULL DEFAULT '',
-  posologia_referencia TEXT NOT NULL DEFAULT '',
-  notas TEXT NOT NULL DEFAULT '',
-  foto_url TEXT,
-  fotos_urls TEXT[] NOT NULL DEFAULT '{}',
-  es_esencial BOOLEAN NOT NULL DEFAULT false,
-  esencial_id TEXT,
-  estado TEXT NOT NULL DEFAULT 'activo', -- 'activo' | 'baja'
-  motivo_baja TEXT, -- 'vencido' | 'tirado' | 'perdido' | 'agotado'
-  fecha_baja TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- 1. Stock de Medicamentos ("botiquin-stock")
+CREATE TABLE IF NOT EXISTS public."botiquin-stock" (
+  id text PRIMARY KEY,
+  nombre text NOT NULL,
+  droga text DEFAULT '',
+  concentracion text DEFAULT '',
+  publico text DEFAULT 'adulto',
+  categoria text DEFAULT 'Otro',
+  unidad text DEFAULT 'comprimidos',
+  cantidad_actual numeric DEFAULT 0,
+  cantidad_inicial numeric DEFAULT 0,
+  stock_minimo numeric DEFAULT 0,
+  fecha_vencimiento text,
+  para_que_sirve text DEFAULT '',
+  posologia_referencia text DEFAULT '',
+  notas text DEFAULT '',
+  foto_url text,
+  fotos_urls jsonb DEFAULT '[]'::jsonb,
+  es_esencial boolean DEFAULT false,
+  esencial_id text,
+  estado text DEFAULT 'activo',
+  motivo_baja text,
+  fecha_baja text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
 );
 
--- 2. Tabla de Productos de Primera Necesidad (Esenciales)
-CREATE TABLE IF NOT EXISTS public.botiquin_esenciales (
-  id TEXT PRIMARY KEY,
-  nombre TEXT NOT NULL,
-  droga_sugerida TEXT NOT NULL DEFAULT '',
-  publico TEXT NOT NULL DEFAULT 'ambos', -- 'adulto' | 'pediatrico' | 'ambos'
-  categoria TEXT NOT NULL DEFAULT 'General',
-  stock_minimo_sugerido NUMERIC NOT NULL DEFAULT 1,
-  unidad_sugerida TEXT NOT NULL DEFAULT 'unidades',
-  keywords TEXT[] NOT NULL DEFAULT '{}',
-  descripcion TEXT NOT NULL DEFAULT '',
-  activo BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- 2. Miembros de la Familia ("botiquin-familiares")
+CREATE TABLE IF NOT EXISTS public."botiquin-familiares" (
+  id text PRIMARY KEY,
+  nombre text NOT NULL,
+  fecha_nacimiento text NOT NULL,
+  peso_kg numeric,
+  antecedentes_medicos text DEFAULT '',
+  dolores_recurrentes text DEFAULT '',
+  alergias text DEFAULT '',
+  medicacion_habitual text DEFAULT '',
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
 );
 
--- 3. Tabla de Historial de Movimientos (Consumos de dosis, altas, bajas, reposiciones)
-CREATE TABLE IF NOT EXISTS public.botiquin_movimientos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  medicamento_id UUID,
-  medicamento_nombre TEXT NOT NULL,
-  tipo TEXT NOT NULL, -- 'alta' | 'consumo' | 'reposicion' | 'baja' | 'edicion'
-  cantidad NUMERIC NOT NULL DEFAULT 0,
-  unidad TEXT NOT NULL DEFAULT 'unidades',
-  motivo TEXT NOT NULL DEFAULT '',
-  usuario_email TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- 3. Catálogo de Productos Esenciales ("botiquin-esenciales")
+CREATE TABLE IF NOT EXISTS public."botiquin-esenciales" (
+  id text PRIMARY KEY,
+  nombre text NOT NULL,
+  droga_sugerida text DEFAULT '',
+  publico text DEFAULT 'ambos',
+  categoria text DEFAULT 'Otro',
+  stock_minimo_sugerido numeric DEFAULT 1,
+  unidad_sugerida text DEFAULT 'unidades',
+  keywords jsonb DEFAULT '[]'::jsonb,
+  descripcion text DEFAULT '',
+  activo boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
--- 4. Tabla de Configuración del Botiquín y Alertas
-CREATE TABLE IF NOT EXISTS public.botiquin_config (
-  id TEXT PRIMARY KEY DEFAULT 'default',
-  email_alertas TEXT NOT NULL DEFAULT 'aeterzano@gmail.com',
-  dias_proximo_vencer INTEGER NOT NULL DEFAULT 30,
-  alertar_proximo_vencer BOOLEAN NOT NULL DEFAULT true,
-  alertar_vencido BOOLEAN NOT NULL DEFAULT true,
-  alertar_esencial_faltante BOOLEAN NOT NULL DEFAULT true,
-  alertar_sin_stock BOOLEAN NOT NULL DEFAULT true,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- 4. Movimientos y Consumos de Stock ("botiquin-movimientos")
+CREATE TABLE IF NOT EXISTS public."botiquin-movimientos" (
+  id text PRIMARY KEY,
+  medicamento_id text NOT NULL,
+  medicamento_nombre text NOT NULL,
+  tipo text NOT NULL,
+  cantidad numeric DEFAULT 0,
+  unidad text DEFAULT '',
+  motivo text DEFAULT '',
+  usuario_email text DEFAULT '',
+  familiar_id text,
+  familiar_nombre text,
+  created_at timestamptz DEFAULT now()
 );
 
--- 5. Tabla de Registro de Alertas Enviadas por Email
-CREATE TABLE IF NOT EXISTS public.botiquin_alertas_log (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tipo TEXT NOT NULL, -- 'proximo_vencer' | 'vencido' | 'esencial_faltante' | 'sin_stock' | 'resumen'
-  titulo TEXT NOT NULL,
-  detalle TEXT NOT NULL,
-  destinatario TEXT NOT NULL DEFAULT 'aeterzano@gmail.com',
-  clave_dedup TEXT NOT NULL,
-  enviado_ok BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- 5. Historial de Consultas al Dr. Botiquín IA ("botiquin-historial")
+CREATE TABLE IF NOT EXISTS public."botiquin-historial" (
+  id text PRIMARY KEY,
+  familiar_id text,
+  paciente_nombre text NOT NULL,
+  paciente_publico text DEFAULT 'adulto',
+  edad_texto text DEFAULT '',
+  peso_kg numeric,
+  consulta text NOT NULL,
+  respuesta_markdown text NOT NULL,
+  "aiData" jsonb,
+  created_at timestamptz DEFAULT now()
 );
 
--- Permisos para service_role y usuarios autenticados
-ALTER TABLE public.botiquin_medicamentos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.botiquin_esenciales ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.botiquin_movimientos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.botiquin_config ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.botiquin_alertas_log ENABLE ROW LEVEL SECURITY;
+-- 6. Registro de Alertas Enviadas ("botiquin-alertas")
+CREATE TABLE IF NOT EXISTS public."botiquin-alertas" (
+  id text PRIMARY KEY,
+  tipo text NOT NULL,
+  titulo text NOT NULL,
+  detalle text DEFAULT '',
+  destinatario text DEFAULT '',
+  clave_dedup text DEFAULT '',
+  enviado_ok boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
 
-CREATE POLICY "Allow all authenticated botiquin_medicamentos" ON public.botiquin_medicamentos FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all authenticated botiquin_esenciales" ON public.botiquin_esenciales FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all authenticated botiquin_movimientos" ON public.botiquin_movimientos FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all authenticated botiquin_config" ON public.botiquin_config FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all authenticated botiquin_alertas_log" ON public.botiquin_alertas_log FOR ALL USING (true) WITH CHECK (true);
+-- 7. Configuración General y de Alertas ("botiquin-config")
+CREATE TABLE IF NOT EXISTS public."botiquin-config" (
+  id text PRIMARY KEY,
+  email_alertas text NOT NULL,
+  dias_proximo_vencer integer DEFAULT 30,
+  alertar_proximo_vencer boolean DEFAULT true,
+  alertar_vencido boolean DEFAULT true,
+  alertar_esencial_faltante boolean DEFAULT true,
+  alertar_sin_stock boolean DEFAULT true,
+  updated_at timestamptz DEFAULT now()
+);
