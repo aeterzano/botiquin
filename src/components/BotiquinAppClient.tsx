@@ -43,6 +43,9 @@ import {
   Copy,
   Share2,
   Calculator,
+  MapPin,
+  CheckSquare,
+  Square,
 } from 'lucide-react'
 import {
   AlertaActiva,
@@ -67,10 +70,15 @@ import {
   PublicoObjetivo,
   UnidadMedida,
   verificarCoberturaEsencial,
+  ConfiguracionViaje,
+  EntornoViaje,
+  evaluarViaje,
+  ItemPersonalizadoViaje,
+  AlertaEvaluacionViaje,
 } from '@/utils/botiquin-types'
 import { CampoFaltanteIA, ConsultaAIResponse } from '@/utils/ai-botiquin'
 
-type TabType = 'stock' | 'consulta' | 'configuracion'
+type TabType = 'stock' | 'consulta' | 'viaje' | 'configuracion'
 type ConfigSubTab = 'familia' | 'esenciales' | 'alertas'
 type ModoCargaMed = 'hibrido_ia' | 'manual'
 type MedModalTab = 'general' | 'stock' | 'uso'
@@ -402,9 +410,47 @@ export default function BotiquinAppClient({
   const [excludedShoppingKeys, setExcludedShoppingKeys] = useState<string[]>([])
   const [customShoppingNote, setCustomShoppingNote] = useState('')
 
-  // Travel / Vacation Checklist Modal (Airplane button in Esenciales)
-  const [viajeModalOpen, setViajeModalOpen] = useState(false)
+  // Travel / Vacation Section State & Persistence (Full dedicated section)
+  const [viajeConfig, setViajeConfig] = useState<ConfiguracionViaje>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = window.localStorage.getItem('botiquin_viaje_config')
+        if (saved) return JSON.parse(saved)
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      destino: '',
+      entornos: ['playa'],
+      familiaresIds: (initialState.familia || []).map((f) => f.id),
+      notas: '',
+      itemsPersonalizados: [],
+    }
+  })
+
+  function updateViajeConfig(
+    updater:
+      | Partial<ConfiguracionViaje>
+      | ((prev: ConfiguracionViaje) => ConfiguracionViaje)
+  ) {
+    setViajeConfig((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+      try {
+        window.localStorage.setItem('botiquin_viaje_config', JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
+
   const [packedViajeIds, setPackedViajeIds] = useState<string[]>([])
+  const [viajeFiltro, setViajeFiltro] = useState<'todos' | 'pendientes' | 'empacados' | 'faltantes'>('todos')
+  const [mostrarFormNuevoItemViaje, setMostrarFormNuevoItemViaje] = useState(false)
+  const [nuevoItemViajeNombre, setNuevoItemViajeNombre] = useState('')
+  const [nuevoItemViajeDroga, setNuevoItemViajeDroga] = useState('')
+  const [nuevoItemViajeParaQue, setNuevoItemViajeParaQue] = useState('')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -521,7 +567,7 @@ export default function BotiquinAppClient({
       let resolvedTab: TabType | null = null
       let resolvedSub: ConfigSubTab | null = null
 
-      if (tabParam === 'stock' || tabParam === 'consulta') {
+      if (tabParam === 'stock' || tabParam === 'consulta' || tabParam === 'viaje') {
         resolvedTab = tabParam
       } else if (tabParam === 'configuracion' || tabParam === 'historial') {
         resolvedTab = 'configuracion'
@@ -541,7 +587,12 @@ export default function BotiquinAppClient({
         try {
           const savedTab = window.localStorage.getItem('botiquin_active_tab')
           const savedSub = window.localStorage.getItem('botiquin_config_subtab')
-          if (savedTab === 'stock' || savedTab === 'consulta' || savedTab === 'configuracion') {
+          if (
+            savedTab === 'stock' ||
+            savedTab === 'consulta' ||
+            savedTab === 'viaje' ||
+            savedTab === 'configuracion'
+          ) {
             resolvedTab = savedTab
           }
           if (savedSub === 'familia' || savedSub === 'esenciales' || savedSub === 'alertas') {
@@ -630,10 +681,6 @@ export default function BotiquinAppClient({
           setShoppingModalOpen(false)
           return
         }
-        if (viajeModalOpen) {
-          setViajeModalOpen(false)
-          return
-        }
         if (medModalOpen) {
           setMedModalOpen(false)
           return
@@ -651,7 +698,6 @@ export default function BotiquinAppClient({
     familiarModalOpen,
     esencialModalOpen,
     shoppingModalOpen,
-    viajeModalOpen,
     medModalOpen,
   ])
 
@@ -728,14 +774,36 @@ export default function BotiquinAppClient({
     }
   }, [state])
 
-  // Travel / Vacation Checklist (Esenciales + Extra Travel-Specific items)
+  // Evaluation of Travel Recommendations according to destination & environments
+  const viajeEvaluacion = useMemo(() => {
+    return evaluarViaje(viajeConfig.destino, viajeConfig.entornos)
+  }, [viajeConfig.destino, viajeConfig.entornos])
+
+  // Travel / Vacation Checklist (Esenciales adaptados a quienes viajan + Extras destino + Personalizados)
   const viajeChecklist = useMemo(() => {
     const activosVigentes = state.medicamentos.filter(
       (m) => m.estado === 'activo' && m.cantidad_actual > 0 && !esMedicamentoVencido(m)
     )
 
+    // Determine who travels
+    const familiaresViajando = (state.familia || []).filter((f) =>
+      viajeConfig.familiaresIds.length === 0 || viajeConfig.familiaresIds.includes(f.id)
+    )
+    const hayNinosViajando = familiaresViajando.some(
+      (f) => calcularEdadDesdeFecha(f.fecha_nacimiento).esPediatrico
+    )
+    const hayAdultosViajando = familiaresViajando.some(
+      (f) => !calcularEdadDesdeFecha(f.fecha_nacimiento).esPediatrico
+    )
+
+    // 1. Esenciales de la familia
     const itemsEsenciales = sortedEsenciales
-      .filter((e) => e.activo)
+      .filter((e) => {
+        if (!e.activo) return false
+        if (!hayNinosViajando && e.publico === 'pediatrico') return false
+        if (!hayAdultosViajando && e.publico === 'adulto') return false
+        return true
+      })
       .map((esc) => {
         const { cubierto, medicamentosQueCubren } = verificarCoberturaEsencial(
           esc,
@@ -752,35 +820,63 @@ export default function BotiquinAppClient({
           stockDetalle: medicamentosQueCubren
             .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
             .join(', '),
+          medicamentosQueCubren,
         }
       })
 
-    const itemsExtras = ITEMS_VIAJE_EXTRA.filter((extra) => {
-      // Avoid duplicating if already in sortedEsenciales (e.g. Gotas Óticas)
-      return !itemsEsenciales.some((ie) =>
-        extra.keywords.some((kw) => normalizeText(ie.nombre).includes(normalizeText(kw)))
-      )
-    }).map((extra) => {
+    // 2. Extras sugeridos por destino y entorno
+    const itemsExtras = viajeEvaluacion.extrasSugeridos
+      .filter((extra) => {
+        return !itemsEsenciales.some((ie) =>
+          extra.keywords.some((kw) => normalizeText(ie.nombre).includes(normalizeText(kw)))
+        )
+      })
+      .map((extra) => {
+        const matches = activosVigentes.filter((m) => {
+          const text = normalizeText(`${m.nombre} ${m.droga} ${m.para_que_sirve} ${m.categoria}`)
+          return extra.keywords.some((kw) => text.includes(normalizeText(kw)))
+        })
+        return {
+          id: `extra:${extra.id}`,
+          origen: 'viaje' as const,
+          nombre: extra.nombre,
+          droga: extra.droga_sugerida,
+          publico: extra.publico,
+          descripcion: extra.descripcion,
+          cubierto: matches.length > 0,
+          stockDetalle: matches
+            .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
+            .join(', '),
+          medicamentosQueCubren: matches,
+        }
+      })
+
+    // 3. Ítems personalizados agregados manualmente
+    const itemsPersonalizados = (viajeConfig.itemsPersonalizados || []).map((custom) => {
       const matches = activosVigentes.filter((m) => {
         const text = normalizeText(`${m.nombre} ${m.droga} ${m.para_que_sirve} ${m.categoria}`)
-        return extra.keywords.some((kw) => text.includes(normalizeText(kw)))
+        return (
+          text.includes(normalizeText(custom.nombre)) ||
+          (custom.droga_sugerida && text.includes(normalizeText(custom.droga_sugerida)))
+        )
       })
       return {
-        id: `extra:${extra.id}`,
-        origen: 'viaje' as const,
-        nombre: extra.nombre,
-        droga: extra.droga_sugerida,
-        publico: extra.publico,
-        descripcion: extra.descripcion,
+        id: `custom:${custom.id}`,
+        origen: 'personalizado' as const,
+        nombre: custom.nombre,
+        droga: custom.droga_sugerida || 'Personalizado',
+        publico: 'ambos' as PublicoObjetivo,
+        descripcion: custom.descripcion || '',
         cubierto: matches.length > 0,
         stockDetalle: matches
           .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
           .join(', '),
+        medicamentosQueCubren: matches,
       }
     })
 
-    return [...itemsEsenciales, ...itemsExtras]
-  }, [sortedEsenciales, state.medicamentos])
+    return [...itemsEsenciales, ...itemsExtras, ...itemsPersonalizados]
+  }, [sortedEsenciales, state.medicamentos, state.familia, viajeConfig, viajeEvaluacion])
 
   // Pharmacy Shopping List (Esenciales faltantes + Vencidos / Sin Stock + optional Viaje extras)
   const shoppingListItems = useMemo(() => {
@@ -832,7 +928,7 @@ export default function BotiquinAppClient({
     // 3. Optional Travel Missing Items
     if (includeViajeInShopping) {
       for (const v of viajeChecklist) {
-        if (v.origen === 'viaje' && !v.cubierto) {
+        if (!v.cubierto && !list.some((existing) => existing.key === v.id || existing.titulo === v.nombre)) {
           list.push({
             key: v.id,
             titulo: v.nombre,
@@ -1709,6 +1805,19 @@ export default function BotiquinAppClient({
               </a>
 
               <a
+                href="/?tab=viaje"
+                onClick={(e) => handleTabNavClick(e, 'viaje')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  activeTab === 'viaje'
+                    ? greyBtnActive
+                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70'
+                }`}
+              >
+                <Plane className="h-4 w-4 text-sky-400" />
+                <span>Viaje</span>
+              </a>
+
+              <a
                 href={`/?tab=configuracion&sub=${configSubTab}`}
                 onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium ${
@@ -1787,6 +1896,19 @@ export default function BotiquinAppClient({
             >
               <Bot className="h-4 w-4" />
               <span>Consultorio IA</span>
+            </a>
+
+            <a
+              href="/?tab=viaje"
+              onClick={(e) => handleTabNavClick(e, 'viaje')}
+              className={`flex items-center space-x-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
+                activeTab === 'viaje'
+                  ? greyBtnActive
+                  : 'text-zinc-200 hover:bg-zinc-800/70'
+              }`}
+            >
+              <Plane className="h-4 w-4 text-sky-400" />
+              <span>Botiquín de Viaje</span>
             </a>
 
             <a
@@ -1910,15 +2032,32 @@ export default function BotiquinAppClient({
             {/* Filters & Search Bar */}
             <div className="flex flex-col space-y-3 rounded-xl border border-[#323846] bg-[#171a22] p-3.5">
               <div className="flex flex-col md:flex-row landscape:flex-row gap-2.5">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Buscar por nombre, droga o síntoma..."
-                    className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] pl-10 pr-4 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                  />
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Buscar por nombre, droga o síntoma..."
+                      className="w-full rounded-lg border border-[#343a48] bg-[#0e1016] pl-10 pr-4 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShoppingModalOpen(true)}
+                    title="Lista de Compras de Farmacia (Compartir por WhatsApp)"
+                    className={`shrink-0 flex items-center space-x-1.5 rounded-lg px-3 py-2 text-xs font-semibold ${greyBtn}`}
+                  >
+                    <ShoppingBag className="h-4 w-4 text-primary" />
+                    <span className="hidden sm:inline">Compras</span>
+                    {shoppingListItems.length > 0 && (
+                      <span className="rounded-full bg-primary/20 border border-primary/40 text-primary px-1.5 py-0.2 text-[10px] font-bold">
+                        {shoppingListItems.length}
+                      </span>
+                    )}
+                  </button>
                 </div>
 
                 {/* Público Filter Pills */}
@@ -1952,51 +2091,34 @@ export default function BotiquinAppClient({
                 </div>
               </div>
 
-              {/* Status Filter Tabs + 1-Click Pharmacy Shopping List Button */}
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#2c313f]">
-                <div className="flex items-center space-x-2 overflow-x-auto">
-                  {[
-                    { id: 'activos', label: 'Stock actual' },
-                    { id: 'proximo_vencer', label: 'Próximos a vencer' },
-                    { id: 'vencidos_sin_stock', label: 'Vencidos / Sin stock' },
-                    { id: 'bajas', label: 'Bajas' },
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() =>
-                        setFilterEstado(
-                          tab.id as
-                            | 'activos'
-                            | 'proximo_vencer'
-                            | 'vencidos_sin_stock'
-                            | 'bajas'
-                        )
-                      }
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                        filterEstado === tab.id
-                          ? 'bg-zinc-700 text-white font-semibold border border-zinc-500/80'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800/60'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShoppingModalOpen(true)}
-                  title="Lista de Compras de Farmacia (Compartir por WhatsApp)"
-                  className={`shrink-0 flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
-                >
-                  <ShoppingBag className="h-3.5 w-3.5 text-primary" />
-                  <span>Compras</span>
-                  {shoppingListItems.length > 0 && (
-                    <span className="rounded-full bg-primary/20 border border-primary/40 text-primary px-1.5 py-0.2 text-[10px] font-bold">
-                      {shoppingListItems.length}
-                    </span>
-                  )}
-                </button>
+              {/* Status Filter Tabs (ocupa todo el ancho, sin scroll horizontal en vertical) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-2 border-t border-[#2c313f]">
+                {[
+                  { id: 'activos', label: 'Stock actual' },
+                  { id: 'proximo_vencer', label: 'Próximos a vencer' },
+                  { id: 'vencidos_sin_stock', label: 'Vencidos / Sin stock' },
+                  { id: 'bajas', label: 'Bajas' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() =>
+                      setFilterEstado(
+                        tab.id as
+                          | 'activos'
+                          | 'proximo_vencer'
+                          | 'vencidos_sin_stock'
+                          | 'bajas'
+                      )
+                    }
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium text-center truncate transition-colors ${
+                      filterEstado === tab.id
+                        ? 'bg-zinc-700 text-white font-semibold border border-zinc-500/80'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -2788,7 +2910,632 @@ export default function BotiquinAppClient({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 3: CONFIGURACIÓN (SUBSECCIONES: FAMILIA | ESENCIALES | ALERTAS) */}
+        {/* TAB 3: BOTIQUÍN DE VIAJE / VACACIONES                             */}
+        {/* ================================================================= */}
+        {activeTab === 'viaje' && (
+          <div className="space-y-5">
+            {/* Header & Subtitle */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-[#323846] bg-[#171a22] p-4 md:p-5">
+              <div className="flex items-start space-x-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sky-500/15 border border-sky-400/30 text-sky-400 shadow-inner">
+                  <Plane className="h-6 w-6" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-foreground tracking-tight">
+                    Botiquín de Viaje / Vacaciones
+                  </h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Planificá tu bolso de medicamentos según tu destino, entorno y quiénes viajan.
+                    Tus ítems empacados se guardan automáticamente.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIncludeViajeInShopping(true)
+                    setShoppingModalOpen(true)
+                  }}
+                  className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${greyBtn}`}
+                >
+                  <ShoppingBag className="h-4 w-4 text-primary" />
+                  <span>Lista de Compras</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Top KPIs & Progress Bar */}
+            {(() => {
+              const totalViaje = viajeChecklist.length
+              const enStockCount = viajeChecklist.filter((i) => i.cubierto).length
+              const faltantesCount = totalViaje - enStockCount
+              const enValijaCount = viajeChecklist.filter((i) =>
+                packedViajeIds.includes(i.id)
+              ).length
+              const pctEmpacado =
+                totalViaje > 0 ? Math.round((enValijaCount / totalViaje) * 100) : 0
+
+              return (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="rounded-xl border border-[#323846] bg-[#171a22] p-3.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">
+                          Total en Checklist
+                        </span>
+                        <div className="text-xl font-bold text-foreground mt-0.5">
+                          {totalViaje} <span className="text-xs font-normal text-muted-foreground">ítems</span>
+                        </div>
+                      </div>
+                      <div className="h-9 w-9 rounded-xl bg-zinc-800/80 border border-zinc-700/80 flex items-center justify-center text-zinc-300">
+                        <Package className="h-4 w-4" />
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-[#323846] bg-[#171a22] p-3.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">
+                          En la Valija
+                        </span>
+                        <div className="text-xl font-bold text-sky-300 mt-0.5">
+                          {enValijaCount} / {totalViaje}{' '}
+                          <span className="text-xs font-semibold text-zinc-400">({pctEmpacado}%)</span>
+                        </div>
+                      </div>
+                      <div className="h-9 w-9 rounded-xl bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-400">
+                        <CheckSquare className="h-4 w-4" />
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-[#323846] bg-[#171a22] p-3.5 flex items-center justify-between">
+                      <div>
+                        <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">
+                          Faltan en Stock
+                        </span>
+                        <div className="text-xl font-bold text-primary mt-0.5">
+                          {faltantesCount}{' '}
+                          <span className="text-xs font-normal text-muted-foreground">por comprar</span>
+                        </div>
+                      </div>
+                      <div className="h-9 w-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
+                        <ShoppingBag className="h-4 w-4" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Bar */}
+                  <div className="rounded-xl border border-[#323846] bg-[#171a22] px-4 py-2.5">
+                    <div className="flex items-center justify-between text-xs mb-1.5">
+                      <span className="text-muted-foreground font-medium">
+                        Progreso de preparación del bolso:
+                      </span>
+                      <strong className="text-sky-300 font-bold">{pctEmpacado}% listo</strong>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-[#0e1016] overflow-hidden border border-[#2b303d]">
+                      <div
+                        className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-300"
+                        style={{ width: `${pctEmpacado}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* CARD 1: Configuración & Destino del Viaje */}
+            <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 sm:p-5 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-[#2c313f]">
+                <div className="flex items-center space-x-2">
+                  <MapPin className="h-4 w-4 text-sky-400" />
+                  <h3 className="text-sm font-bold text-foreground">
+                    Planificación y Destino del Viaje
+                  </h3>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Se guarda automáticamente
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Destino input */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-200 block">
+                    ¿A dónde van a viajar?
+                  </label>
+                  <div className="relative">
+                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={viajeConfig.destino}
+                      onChange={(e) => updateViajeConfig({ destino: e.target.value })}
+                      placeholder="Ej: Florianópolis (Brasil), Bariloche, Cataratas, Costa..."
+                      className="w-full rounded-xl border border-[#383f4e] bg-[#0e1016] pl-9 pr-3 py-2 text-xs sm:text-sm text-foreground focus:border-sky-400 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Preset destination suggestions */}
+                  <div className="flex items-center flex-wrap gap-1.5 pt-1">
+                    <span className="text-[11px] text-muted-foreground mr-1">Rápido:</span>
+                    {[
+                      { label: '🏖️ Brasil / Playa', destino: 'Florianópolis, Brasil', entornos: ['playa', 'selva'] as EntornoViaje[] },
+                      { label: '🏔️ Bariloche / Montaña', destino: 'Bariloche, Río Negro', entornos: ['montana'] as EntornoViaje[] },
+                      { label: '🌴 Cataratas / Misiones', destino: 'Cataratas del Iguazú, Misiones', entornos: ['selva'] as EntornoViaje[] },
+                      { label: '🏖️ Costa Atlántica', destino: 'Mar del Plata / Pinamar', entornos: ['playa'] as EntornoViaje[] },
+                    ].map((preset, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() =>
+                          updateViajeConfig({
+                            destino: preset.destino,
+                            entornos: preset.entornos,
+                          })
+                        }
+                        className="rounded-lg bg-[#0e1016] border border-[#2e3444] px-2 py-0.5 text-[11px] text-zinc-300 hover:text-white hover:border-zinc-500"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tipo de Entorno / Clima */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-200 block">
+                    Tipo de Entorno / Clima:
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { id: 'playa', label: '🏖️ Playa / Mar', desc: 'Sol fuerte, agua, otitis' },
+                      { id: 'montana', label: '🏔️ Montaña / Altura', desc: 'Frío, viento, caminatas' },
+                      { id: 'selva', label: '🌴 Selva / Trópico', desc: 'Mosquitos, vacunas' },
+                      { id: 'ciudad', label: '🏙️ Ciudad / Urbano', desc: 'Traslado liviano' },
+                    ].map((ent) => {
+                      const isSelected = viajeConfig.entornos.includes(ent.id as EntornoViaje)
+                      return (
+                        <button
+                          key={ent.id}
+                          type="button"
+                          onClick={() => {
+                            const cur = viajeConfig.entornos
+                            const next = cur.includes(ent.id as EntornoViaje)
+                              ? cur.filter((x) => x !== ent.id)
+                              : [...cur, ent.id as EntornoViaje]
+                            updateViajeConfig({ entornos: next.length > 0 ? next : ['ciudad'] })
+                          }}
+                          className={`p-2 rounded-xl text-left border transition-all ${
+                            isSelected
+                              ? 'bg-sky-500/15 border-sky-400/40 text-white shadow-sm'
+                              : 'bg-[#0e1016] border-[#2e3444] text-zinc-400 hover:border-zinc-600'
+                          }`}
+                        >
+                          <div className="text-xs font-bold leading-tight">{ent.label}</div>
+                          <span className="text-[10px] text-muted-foreground block leading-tight mt-0.5">
+                            {ent.desc}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* ¿Quiénes viajan? */}
+              <div className="pt-2 border-t border-[#2c313f] space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-zinc-200 block">
+                    ¿Quiénes viajan del grupo familiar?
+                  </label>
+                  <span className="text-[11px] text-muted-foreground">
+                    Adapta los esenciales pediátricos o de adultos
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {(state.familia || []).map((f) => {
+                    const isSelected =
+                      viajeConfig.familiaresIds.length === 0 ||
+                      viajeConfig.familiaresIds.includes(f.id)
+                    const edad = calcularEdadDesdeFecha(f.fecha_nacimiento)
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => {
+                          const cur = viajeConfig.familiaresIds
+                          const next = cur.includes(f.id)
+                            ? cur.filter((x) => x !== f.id)
+                            : [...cur, f.id]
+                          updateViajeConfig({ familiaresIds: next })
+                        }}
+                        className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
+                          isSelected
+                            ? 'bg-zinc-700 text-white font-semibold border-zinc-400'
+                            : 'bg-[#0e1016] border-[#2e3444] text-zinc-400 opacity-60'
+                        }`}
+                      >
+                        <span>{obtenerEmojiFamiliar(f)}</span>
+                        <span>{f.nombre}</span>
+                        <span className="text-[10px] text-zinc-400">
+                          ({edad.esPediatrico ? 'Niño' : 'Adulto'})
+                        </span>
+                      </button>
+                    )
+                  })}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateViajeConfig({
+                        familiaresIds: (state.familia || []).map((f) => f.id),
+                      })
+                    }
+                    className="text-[11px] text-sky-400 underline hover:text-sky-300 ml-1"
+                  >
+                    Viajan todos
+                  </button>
+                </div>
+              </div>
+
+              {/* Notas de viaje */}
+              <div className="pt-2 border-t border-[#2c313f]">
+                <label className="text-xs font-medium text-zinc-200 block mb-1">
+                  Notas / Recordatorios del viaje:
+                </label>
+                <input
+                  type="text"
+                  value={viajeConfig.notas}
+                  onChange={(e) => updateViajeConfig({ notas: e.target.value })}
+                  placeholder="Ej: Llevar recetas médicas impresas, comprar repelente adicional..."
+                  className="w-full rounded-xl border border-[#383f4e] bg-[#0e1016] px-3 py-1.5 text-xs text-foreground focus:border-sky-400 focus:outline-none"
+                />
+              </div>
+
+              {/* Alertas y Recomendaciones Clínicas del Destino */}
+              {viajeEvaluacion.alertas.length > 0 && (
+                <div className="pt-3 border-t border-[#2c313f] space-y-2">
+                  <h4 className="text-xs font-bold text-sky-300 flex items-center space-x-1.5 uppercase tracking-wider">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span>Recomendaciones Médicas para este Destino:</span>
+                  </h4>
+                  <div className="space-y-2">
+                    {viajeEvaluacion.alertas.map((alerta, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-xl border p-3 text-xs leading-relaxed ${
+                          alerta.nivel === 'importante'
+                            ? 'border-red-400/40 bg-red-950/20 text-red-200'
+                            : 'border-sky-500/30 bg-sky-950/20 text-sky-200'
+                        }`}
+                      >
+                        <strong className="block text-foreground font-semibold mb-0.5">
+                          {alerta.titulo}
+                        </strong>
+                        <p className="text-zinc-300 text-[11px] sm:text-xs">
+                          {alerta.mensaje}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* CARD 2: Checklist de la Valija */}
+            <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 sm:p-5 space-y-4">
+              {/* Checklist Toolbar */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#2c313f]">
+                <div className="flex items-center space-x-1.5 overflow-x-auto">
+                  {[
+                    { id: 'todos', label: `Todos (${viajeChecklist.length})` },
+                    {
+                      id: 'pendientes',
+                      label: `Pendientes (${
+                        viajeChecklist.filter((i) => !packedViajeIds.includes(i.id)).length
+                      })`,
+                    },
+                    {
+                      id: 'empacados',
+                      label: `En Valija (${
+                        viajeChecklist.filter((i) => packedViajeIds.includes(i.id)).length
+                      })`,
+                    },
+                    {
+                      id: 'faltantes',
+                      label: `Faltan en Botiquín (${
+                        viajeChecklist.filter((i) => !i.cubierto).length
+                      })`,
+                    },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() =>
+                        setViajeFiltro(f.id as 'todos' | 'pendientes' | 'empacados' | 'faltantes')
+                      }
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                        viajeFiltro === f.id
+                          ? 'bg-zinc-700 text-white border border-zinc-400'
+                          : 'text-muted-foreground hover:text-white hover:bg-zinc-800/60'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setMostrarFormNuevoItemViaje(!mostrarFormNuevoItemViaje)}
+                  className={`shrink-0 flex items-center space-x-1 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Agregar Ítem</span>
+                </button>
+              </div>
+
+              {/* Form to add custom item to trip */}
+              {mostrarFormNuevoItemViaje && (
+                <div className="rounded-xl border border-sky-400/40 bg-[#0e1016] p-3 space-y-2.5 animate-in fade-in">
+                  <h4 className="text-xs font-bold text-foreground">
+                    Agregar ítem personalizado para el viaje:
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={nuevoItemViajeNombre}
+                      onChange={(e) => setNuevoItemViajeNombre(e.target.value)}
+                      placeholder="Nombre (ej: Nebulizador, Vacuna...)"
+                      className="rounded-lg border border-[#383f4e] bg-[#141822] px-3 py-1.5 text-xs text-foreground"
+                    />
+                    <input
+                      type="text"
+                      value={nuevoItemViajeDroga}
+                      onChange={(e) => setNuevoItemViajeDroga(e.target.value)}
+                      placeholder="Detalle o Marca sugerida"
+                      className="rounded-lg border border-[#383f4e] bg-[#141822] px-3 py-1.5 text-xs text-foreground"
+                    />
+                    <input
+                      type="text"
+                      value={nuevoItemViajeParaQue}
+                      onChange={(e) => setNuevoItemViajeParaQue(e.target.value)}
+                      placeholder="¿Para qué sirve? (opcional)"
+                      className="rounded-lg border border-[#383f4e] bg-[#141822] px-3 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setMostrarFormNuevoItemViaje(false)}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!nuevoItemViajeNombre.trim()) return
+                        const nuevo: ItemPersonalizadoViaje = {
+                          id: `cust-${Date.now()}`,
+                          nombre: nuevoItemViajeNombre.trim(),
+                          droga_sugerida: nuevoItemViajeDroga.trim(),
+                          descripcion: nuevoItemViajeParaQue.trim(),
+                        }
+                        updateViajeConfig((prev) => ({
+                          ...prev,
+                          itemsPersonalizados: [...(prev.itemsPersonalizados || []), nuevo],
+                        }))
+                        setNuevoItemViajeNombre('')
+                        setNuevoItemViajeDroga('')
+                        setNuevoItemViajeParaQue('')
+                        setMostrarFormNuevoItemViaje(false)
+                        showToast('Ítem agregado al checklist del viaje')
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold ${greyBtnActive}`}
+                    >
+                      Guardar Ítem
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Checklist Items List */}
+              {(() => {
+                const itemsFiltrados = viajeChecklist.filter((item) => {
+                  const isPacked = packedViajeIds.includes(item.id)
+                  if (viajeFiltro === 'pendientes') return !isPacked
+                  if (viajeFiltro === 'empacados') return isPacked
+                  if (viajeFiltro === 'faltantes') return !item.cubierto
+                  return true
+                })
+
+                if (itemsFiltrados.length === 0) {
+                  return (
+                    <div className="rounded-xl border border-dashed border-[#343a48] bg-[#0e1016] p-8 text-center text-xs text-muted-foreground">
+                      No hay ítems en esta vista de filtro.
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {itemsFiltrados.map((item) => {
+                      const isPacked = packedViajeIds.includes(item.id)
+                      return (
+                        <div
+                          key={item.id}
+                          className={`rounded-xl border p-3 transition-colors flex items-start justify-between gap-3 ${
+                            isPacked
+                              ? 'border-emerald-500/30 bg-[#12181d]'
+                              : item.cubierto
+                              ? 'border-[#343a48] bg-[#141822]'
+                              : 'border-primary/35 bg-primary/5'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                            <input
+                              type="checkbox"
+                              checked={isPacked}
+                              onChange={() => togglePackedViajeItem(item.id)}
+                              title="Marcar como guardado en el bolso / valija"
+                              className="mt-1 h-4 w-4 rounded border-[#4a5264] accent-[#10b981] cursor-pointer shrink-0"
+                            />
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex items-center flex-wrap gap-1.5">
+                                <span
+                                  className={`text-xs font-bold ${
+                                    isPacked
+                                      ? 'line-through text-muted-foreground'
+                                      : 'text-foreground'
+                                  }`}
+                                >
+                                  {item.nombre}
+                                </span>
+                                <span className="text-sm leading-none select-none">
+                                  {item.publico === 'pediatrico'
+                                    ? '👶'
+                                    : item.publico === 'ambos'
+                                    ? '👨‍👩‍👧'
+                                    : '🧑'}
+                                </span>
+                                {item.origen === 'viaje' && (
+                                  <span className="rounded-md bg-sky-500/15 border border-sky-400/30 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
+                                    ✈️ Extra Viaje
+                                  </span>
+                                )}
+                                {item.origen === 'esencial' && (
+                                  <span className="rounded-md bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                    ⭐ Esencial
+                                  </span>
+                                )}
+                                {item.origen === 'personalizado' && (
+                                  <span className="rounded-md bg-amber-500/15 border border-amber-400/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                                    📝 Personalizado
+                                  </span>
+                                )}
+                              </div>
+
+                              <p className="text-[11px] text-muted-foreground">
+                                <strong className="text-zinc-300">{item.droga}</strong>
+                                {item.descripcion ? ` • ${item.descripcion}` : ''}
+                              </p>
+
+                              {item.cubierto ? (
+                                <div className="text-[11px] text-emerald-300 font-medium">
+                                  ✓ En stock: {item.stockDetalle}
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-red-300 font-medium">
+                                  ⚠️ Falta en el botiquín
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span
+                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${
+                                isPacked
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                  : item.cubierto
+                                  ? 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+                                  : 'bg-primary/15 text-primary border border-primary/40'
+                              }`}
+                            >
+                              {isPacked ? '✓ En valija' : item.cubierto ? 'En stock' : 'Falta'}
+                            </span>
+
+                            {!item.cubierto && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openNewMedModal({
+                                    nombre: item.nombre,
+                                    droga: item.droga,
+                                    publico: item.publico,
+                                  })
+                                }
+                                title="Cargar en Stock"
+                                className={`p-1.5 rounded-lg ${greyBtn}`}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+
+                            {item.origen === 'personalizado' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const customId = item.id.replace('custom:', '')
+                                  updateViajeConfig((prev) => ({
+                                    ...prev,
+                                    itemsPersonalizados: (prev.itemsPersonalizados || []).filter(
+                                      (x) => x.id !== customId
+                                    ),
+                                  }))
+                                  setPackedViajeIds((prev) => prev.filter((x) => x !== item.id))
+                                }}
+                                title="Eliminar ítem personalizado"
+                                className="p-1.5 rounded-lg text-zinc-400 hover:text-red-300 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
+              {/* Footer Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#2c313f]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        '¿Estás seguro de que querés desmarcar todos los ítems de la valija para comenzar un nuevo viaje?'
+                      )
+                    ) {
+                      setPackedViajeIds([])
+                      try {
+                        window.localStorage.removeItem('botiquin_viaje_packed')
+                      } catch {
+                        // ignore
+                      }
+                      showToast('Valija reiniciada')
+                    }
+                  }}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  Reiniciar valija
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIncludeViajeInShopping(true)
+                      setShoppingModalOpen(true)
+                    }}
+                    className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                  >
+                    <ShoppingBag className="h-3.5 w-3.5 text-primary" />
+                    <span>Ver faltantes en Compras</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 4: CONFIGURACIÓN (SUBSECCIONES: FAMILIA | ESENCIALES | ALERTAS) */}
         {/* ================================================================= */}
         {activeTab === 'configuracion' && (
           <div className="space-y-4">
@@ -3121,7 +3868,7 @@ export default function BotiquinAppClient({
             {/* ------------------------------------------------------------- */}
             {configSubTab === 'esenciales' && (
               <div className="space-y-3">
-                {/* Header with Airplane Button (Botiquín de Viaje), Shopping List & '+ Esencial' */}
+                {/* Header with Shopping List & '+ Esencial' */}
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
                   <div className="flex items-center space-x-2 min-w-0">
                     <Star className="h-4 w-4 text-primary shrink-0" />
@@ -3138,15 +3885,6 @@ export default function BotiquinAppClient({
                       className={`flex items-center justify-center rounded-lg p-1.5 text-xs font-semibold ${greyBtn}`}
                     >
                       <ShoppingBag className="h-4 w-4 text-primary" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setViajeModalOpen(true)}
-                      title="Botiquín de Viaje / Vacaciones (Checklist)"
-                      aria-label="Botiquín de Viaje"
-                      className={`flex items-center justify-center rounded-lg p-1.5 text-xs font-semibold ${greyBtn}`}
-                    >
-                      <Plane className="h-4 w-4 text-sky-300" />
                     </button>
                     <button
                       onClick={openNewEsencialModal}
@@ -3587,38 +4325,49 @@ export default function BotiquinAppClient({
       </main>
 
       {/* Mobile Bottom Navigation Bar (hidden in landscape to keep horizontal screen clean with hamburger menu) */}
-      <div className="md:hidden landscape:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-2 py-1.5 grid grid-cols-3 gap-1">
+      <div className="md:hidden landscape:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-[#383e4e] bg-[#1e222d]/95 backdrop-blur px-1.5 py-1.5 grid grid-cols-4 gap-1">
         <a
           href="/?tab=stock"
           onClick={(e) => handleTabNavClick(e, 'stock')}
-          className={`flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'stock' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Package className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
+          <Package className="h-4 w-4 mb-0.5" />
           <span>Stock</span>
         </a>
 
         <a
           href="/?tab=consulta"
           onClick={(e) => handleTabNavClick(e, 'consulta')}
-          className={`flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'consulta' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Bot className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
-          <span>Consultorio IA</span>
+          <Bot className="h-4 w-4 mb-0.5" />
+          <span>Consultorio</span>
+        </a>
+
+        <a
+          href="/?tab=viaje"
+          onClick={(e) => handleTabNavClick(e, 'viaje')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
+            activeTab === 'viaje' ? 'text-primary' : 'text-muted-foreground'
+          }`}
+        >
+          <Plane className="h-4 w-4 mb-0.5 text-sky-400" />
+          <span>Viaje</span>
         </a>
 
         <a
           href={`/?tab=configuracion&sub=${configSubTab}`}
           onClick={(e) => handleTabNavClick(e, 'configuracion', configSubTab)}
-          className={`relative flex flex-col landscape:flex-row landscape:gap-1.5 items-center justify-center py-1 rounded-lg text-[11px] font-medium ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-lg text-[10.5px] font-medium ${
             activeTab === 'configuracion' ? 'text-primary' : 'text-muted-foreground'
           }`}
         >
-          <Settings className="h-5 w-5 landscape:h-4 landscape:w-4 mb-0.5 landscape:mb-0" />
-          <span>Configuración</span>
+          <Settings className="h-4 w-4 mb-0.5" />
+          <span>Config</span>
         </a>
       </div>
 
@@ -4738,208 +5487,7 @@ export default function BotiquinAppClient({
         </div>
       )}
 
-      {/* ===================================================================== */}
-      {/* MODAL: BOTIQUÍN DE VIAJE / VACACIONES (CHECKLIST VISUAL)              */}
-      {/* ===================================================================== */}
-      {viajeModalOpen && (
-        <div
-          onClick={() => setViajeModalOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl border border-[#4a5264] bg-[#232733] p-5 shadow-2xl ring-1 ring-white/10"
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-[#383f4e] shrink-0">
-              <div className="flex items-center space-x-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/15 border border-sky-400/40 text-sky-300">
-                  <Plane className="h-4 w-4" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-foreground">
-                    Botiquín de Viaje / Vacaciones
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Esenciales de tu familia + adicionales exclusivos para viajes
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setViajeModalOpen(false)}
-                className={`p-1.5 rounded-lg ${greyBtn}`}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
 
-            {/* Summary KPIs */}
-            {(() => {
-              const totalViaje = viajeChecklist.length
-              const enStockCount = viajeChecklist.filter((i) => i.cubierto).length
-              const faltantesCount = totalViaje - enStockCount
-              const enValijaCount = viajeChecklist.filter((i) =>
-                packedViajeIds.includes(i.id)
-              ).length
-
-              return (
-                <div className="grid grid-cols-3 gap-2 my-3 shrink-0">
-                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
-                    <span className="text-[11px] text-muted-foreground block">Ya tenés</span>
-                    <strong className="text-sm text-emerald-300">
-                      {enStockCount} / {totalViaje}
-                    </strong>
-                  </div>
-                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
-                    <span className="text-[11px] text-muted-foreground block">Te faltan</span>
-                    <strong className="text-sm text-primary">{faltantesCount}</strong>
-                  </div>
-                  <div className="rounded-xl border border-[#343a48] bg-[#161922] px-3 py-2 text-center">
-                    <span className="text-[11px] text-muted-foreground block">En valija</span>
-                    <strong className="text-sm text-sky-300">
-                      {enValijaCount} / {totalViaje}
-                    </strong>
-                  </div>
-                </div>
-              )
-            })()}
-
-            {/* Checklist Items */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-              {viajeChecklist.map((item) => {
-                const isPacked = packedViajeIds.includes(item.id)
-                return (
-                  <div
-                    key={item.id}
-                    className={`rounded-xl border p-3 transition-colors flex items-start justify-between gap-3 ${
-                      item.cubierto
-                        ? 'border-[#343a48] bg-[#161922]'
-                        : 'border-primary/35 bg-primary/5'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                      <input
-                        type="checkbox"
-                        checked={isPacked}
-                        onChange={() => togglePackedViajeItem(item.id)}
-                        title="Marcar como guardado en el bolso / valija"
-                        className="mt-1 h-4 w-4 rounded border-[#4a5264] accent-[#f87171] cursor-pointer shrink-0"
-                      />
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-center flex-wrap gap-1.5">
-                          <span
-                            className={`text-xs font-bold ${
-                              isPacked ? 'line-through text-muted-foreground' : 'text-foreground'
-                            }`}
-                          >
-                            {item.nombre}
-                          </span>
-                          <span className="text-sm leading-none select-none">
-                            {item.publico === 'pediatrico'
-                              ? '👶'
-                              : item.publico === 'ambos'
-                              ? '👨‍👩‍👧'
-                              : '🧑'}
-                          </span>
-                          {item.origen === 'viaje' && (
-                            <span className="rounded-md bg-sky-500/15 border border-sky-400/30 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">
-                              ✈️ Extra Viaje
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-[11px] text-muted-foreground">
-                          <strong className="text-zinc-300">{item.droga}</strong> • {item.descripcion}
-                        </p>
-
-                        {item.cubierto ? (
-                          <div className="text-[11px] text-emerald-300 font-medium">
-                            ✓ En stock: {item.stockDetalle}
-                          </div>
-                        ) : (
-                          <div className="text-[11px] text-red-300">
-                            Falta en el botiquín
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span
-                        className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${
-                          item.cubierto
-                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-primary/15 text-primary border border-primary/40'
-                        }`}
-                      >
-                        {item.cubierto ? '✓ Tenés' : 'Falta'}
-                      </span>
-
-                      {!item.cubierto && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setViajeModalOpen(false)
-                            openNewMedModal({
-                              nombre: item.nombre,
-                              droga: item.droga,
-                              publico: item.publico,
-                            })
-                          }}
-                          title="Cargar en Stock"
-                          className={`p-1.5 rounded-lg ${greyBtn}`}
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Footer Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 mt-3 border-t border-[#383f4e] shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setPackedViajeIds([])
-                  try {
-                    window.localStorage.removeItem('botiquin_viaje_packed')
-                  } catch {
-                    // ignore
-                  }
-                }}
-                className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
-              >
-                Reiniciar valija
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIncludeViajeInShopping(true)
-                    setViajeModalOpen(false)
-                    setShoppingModalOpen(true)
-                  }}
-                  className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
-                >
-                  <ShoppingBag className="h-3.5 w-3.5 text-primary" />
-                  <span>Comprar faltantes</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViajeModalOpen(false)}
-                  className={`rounded-xl px-4 py-1.5 text-xs font-semibold ${greyBtnActive}`}
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ===================================================================== */}
       {/* MODAL: LISTA DE COMPRAS DE FARMACIA EN 1 CLIC (WHATSAPP)              */}
@@ -5059,9 +5607,9 @@ export default function BotiquinAppClient({
                   const text = buildShoppingWhatsAppText()
                   try {
                     await navigator.clipboard.writeText(text)
-                    setBanner({ type: 'success', text: 'Lista de compras copiada al portapapeles.' })
+                    showToast('Lista de compras copiada al portapapeles.', 'success')
                   } catch {
-                    setBanner({ type: 'error', text: 'No se pudo copiar automáticamente.' })
+                    showToast('No se pudo copiar automáticamente.', 'error')
                   }
                 }}
                 className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${greyBtn}`}

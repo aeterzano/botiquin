@@ -25,7 +25,6 @@ export async function register() {
         }
       },
       {
-        scheduled: true,
         timezone: 'America/Argentina/Buenos_Aires',
       }
     )

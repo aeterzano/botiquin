@@ -439,6 +439,8 @@ export function calcularDosisPediatricaPorPeso(
   return null
 }
 
+export type EntornoViaje = 'playa' | 'montana' | 'selva' | 'ciudad'
+
 export interface ItemViajeExtra {
   id: string
   nombre: string
@@ -446,6 +448,30 @@ export interface ItemViajeExtra {
   publico: PublicoObjetivo
   descripcion: string
   keywords: string[]
+  entorno?: EntornoViaje | 'todos'
+  esVacunaOCertificado?: boolean
+}
+
+export interface ItemPersonalizadoViaje {
+  id: string
+  nombre: string
+  droga_sugerida: string
+  descripcion: string
+}
+
+export interface ConfiguracionViaje {
+  destino: string
+  entornos: EntornoViaje[]
+  familiaresIds: string[]
+  notas: string
+  itemsPersonalizados: ItemPersonalizadoViaje[]
+}
+
+export interface AlertaEvaluacionViaje {
+  tipo: 'vacuna' | 'mosquito' | 'sol' | 'altura' | 'general'
+  nivel: 'importante' | 'recomendacion'
+  titulo: string
+  mensaje: string
 }
 
 export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
@@ -456,6 +482,7 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     publico: 'ambos',
     descripcion: 'Prevenir náuseas y mareos por movimiento durante el viaje.',
     keywords: ['dramamine', 'dimenhidrinato', 'mareo', 'cinetosis'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-protector-solar',
@@ -464,6 +491,7 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     publico: 'ambos',
     descripcion: 'Protección solar para paseos al aire libre, playa o montaña.',
     keywords: ['protector solar', 'fps', 'dermaglos solar', 'pantalla solar', 'anthelios', 'isdin'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-post-solar',
@@ -472,14 +500,35 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     publico: 'ambos',
     descripcion: 'Alivio de quemaduras solares, irritaciones o escaldaduras.',
     keywords: ['post solar', 'aloe', 'platsul', 'hipoglos', 'dermaglos', 'caladryl', 'quemadura'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-repelente',
-    nombre: 'Repelente de Insectos',
+    nombre: 'Repelente de Insectos estándar',
     droga_sugerida: 'DEET / Icaridina / Citronella (según edad)',
     publico: 'ambos',
     descripcion: 'Prevención de picaduras de mosquitos e insectos.',
     keywords: ['repelente', 'off', 'exposis', 'icaridina', 'citronella', 'mosquito'],
+    entorno: 'todos',
+  },
+  {
+    id: 'viaje-repelente-deet-alto',
+    nombre: 'Repelente DEET 25% / Larga Duración (Selva / Trópico)',
+    droga_sugerida: 'DEET 25% (Off verde / Exposis)',
+    publico: 'ambos',
+    descripcion: 'Protección reforzada contra mosquitos transmisores de Dengue, Zika, Chikungunya y Fiebre Amarilla.',
+    keywords: ['deet', 'off verde', 'exposis', 'repelente selva', 'repelente larga duracion'],
+    entorno: 'selva',
+  },
+  {
+    id: 'viaje-vacuna-fiebre-amarilla',
+    nombre: 'Certificado / Vacuna Fiebre Amarilla',
+    droga_sugerida: 'Vacuna antiamarílica (aplicar al menos 10 días antes del viaje)',
+    publico: 'ambos',
+    descripcion: 'Requerida o recomendada para zonas de selva, trópico, Brasil (ciertos estados), Misiones o países endémicos.',
+    keywords: ['fiebre amarilla', 'vacuna', 'carnet vacunacion', 'certificado vacunacion'],
+    entorno: 'selva',
+    esVacunaOCertificado: true,
   },
   {
     id: 'viaje-post-picaduras',
@@ -487,7 +536,8 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     droga_sugerida: 'Difenhidramina tópica (Caladryl) / Hidrocortisona',
     publico: 'ambos',
     descripcion: 'Picazón e inflamación local por picaduras de insectos o plantas.',
-    keywords: ['caladryl', 'hidrocortisona', 'betacort', 'picadura', ' Mometasona'],
+    keywords: ['caladryl', 'hidrocortisona', 'betacort', 'picadura', 'mometasona'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-gotas-oticas',
@@ -495,7 +545,26 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     droga_sugerida: 'Ciprofloxacina + Hidrocortisona / Alcohol Boricado',
     publico: 'ambos',
     descripcion: 'Dolor de oído u otitis externa tras meterse a la pileta o al mar.',
-    keywords: ['otic', 'otex', 'valmax', 'ciriax otic', 'sincerum', 'oido'],
+    keywords: ['otic', 'otex', 'valmax', 'ciriax otic', 'sincerum', 'oido', 'gotas oticas'],
+    entorno: 'playa',
+  },
+  {
+    id: 'viaje-crema-rozaduras-trekking',
+    nombre: 'Crema Antifricción / Protector Labial UV (Montaña)',
+    droga_sugerida: 'Manteca de cacao con filtro UV / Crema de ordeñe / Vaselina',
+    publico: 'ambos',
+    descripcion: 'Previene resequedad, grietas en labios y paspaduras por frío, viento o largas caminatas.',
+    keywords: ['labial', 'manteca de cacao', 'vaselina', 'friccion', 'rozadura', 'crema ordene'],
+    entorno: 'montana',
+  },
+  {
+    id: 'viaje-venda-elastica',
+    nombre: 'Venda Elástica Autoadherente / Tobillera',
+    droga_sugerida: 'Venda elástica 5 a 10 cm (tipo Coban)',
+    publico: 'ambos',
+    descripcion: 'Sostén rápido ante esguinces, torceduras o sobrecargas articulares en caminatas.',
+    keywords: ['venda', 'elastica', 'coban', 'tobillera', 'venda elastica'],
+    entorno: 'montana',
   },
   {
     id: 'viaje-curitas-gasas',
@@ -504,14 +573,16 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     publico: 'ambos',
     descripcion: 'Raspaduras, ampollas por caminatas y pequeños cortes.',
     keywords: ['curitas', 'gasas', 'venda', 'apósito', 'aposito', 'tela adhesiva'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-termometro',
     nombre: 'Termómetro Digital',
-    droga_sugerida: 'Termómetro clínico',
+    droga_sugerida: 'Termómetro clínico digital',
     publico: 'ambos',
     descripcion: 'Controlar fiebre fuera de casa.',
     keywords: ['termometro'],
+    entorno: 'todos',
   },
   {
     id: 'viaje-probiotico-diarrea',
@@ -520,8 +591,74 @@ export const ITEMS_VIAJE_EXTRA: ItemViajeExtra[] = [
     publico: 'ambos',
     descripcion: 'Gastroenteritis o cambios de agua/comida durante las vacaciones.',
     keywords: ['enterogermina', 'floratil', 'probiotico', 'loperamida', 'suprasec'],
+    entorno: 'todos',
   },
 ]
+
+export function evaluarViaje(
+  destino: string,
+  entornos: EntornoViaje[]
+): {
+  alertas: AlertaEvaluacionViaje[]
+  extrasSugeridos: ItemViajeExtra[]
+} {
+  const normDestino = normalizeText(destino || '')
+  const alertas: AlertaEvaluacionViaje[] = []
+
+  // Check if destination implies jungle / mosquito / yellow fever
+  const tieneMosquitosOTrópico =
+    entornos.includes('selva') ||
+    ['brasil', 'florianopolis', 'rio', 'buzios', 'cataratas', 'iguazu', 'misiones', 'selva', 'amazonas', 'colombia', 'caribe', 'cuba', 'cancun', 'mexico', 'tailandia', 'sudeste', 'africa', 'pantanal', 'paraguay', 'bolivia'].some((kw) => normDestino.includes(kw))
+
+  const tienePlaya =
+    entornos.includes('playa') ||
+    ['playa', 'mar', 'costa', 'gesell', 'pinamar', 'mar del plata', 'buzios', 'florianopolis', 'cancun', 'caribe', 'isla', 'miami'].some((kw) => normDestino.includes(kw))
+
+  const tieneMontana =
+    entornos.includes('montana') ||
+    ['montana', 'montaña', 'nieve', 'bariloche', 'mendoza', 'san martin', 'cordillera', 'cusco', 'peru', 'machu picchu', 'la paz', 'ushuaia', 'esquel', 'cerro'].some((kw) => normDestino.includes(kw))
+
+  if (tieneMosquitosOTrópico) {
+    alertas.push({
+      tipo: 'vacuna',
+      nivel: 'importante',
+      titulo: '⚠️ Prevención de Fiebre Amarilla y Dengue',
+      mensaje:
+        'Para destinos tropicales o de selva (como ciertas regiones de Brasil, Misiones o el Sudeste Asiático), verificá si se exige o recomienda la vacuna contra Fiebre Amarilla (debe aplicarse al menos 10 días antes de viajar). Llevá repelente con alta concentración de DEET (25%) y ropa de manga larga para el amanecer y atardecer.',
+    })
+  }
+
+  if (tienePlaya) {
+    alertas.push({
+      tipo: 'sol',
+      nivel: 'recomendacion',
+      titulo: '☀️ Sol y Agua (Mar / Pileta)',
+      mensaje:
+        'El sol fuerte y el contacto prolongado con el agua aumentan el riesgo de insolación y otitis externa. Llevá protector solar FPS 50+ (reaplicar cada 2 hs), gotas óticas secantes y sales de rehidratación oral.',
+    })
+  }
+
+  if (tieneMontana) {
+    alertas.push({
+      tipo: 'altura',
+      nivel: 'recomendacion',
+      titulo: '🏔️ Clima de Montaña y Altura',
+      mensaje:
+        'En zonas de altura o clima frío se intensifican las cefaleas por hipoxia y la resequedad. Mantené hidratación constante, llevá Ibuprofeno/Paracetamol, protector labial con filtro UV y vendas para caminatas.',
+    })
+  }
+
+  // Filter extras applicable based on selected environments
+  const extrasSugeridos = ITEMS_VIAJE_EXTRA.filter((item) => {
+    if (!item.entorno || item.entorno === 'todos') return true
+    if (item.entorno === 'selva') return tieneMosquitosOTrópico
+    if (item.entorno === 'playa') return tienePlaya
+    if (item.entorno === 'montana') return tieneMontana
+    return false
+  })
+
+  return { alertas, extrasSugeridos }
+}
 
 /**
  * Deduplicates essentials and only adds truly new categories/drugs not already covered
