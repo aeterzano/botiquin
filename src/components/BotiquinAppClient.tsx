@@ -2127,79 +2127,9 @@ export default function BotiquinAppClient({
         {/* TAB 1: STOCK                                                      */}
         {/* ================================================================= */}
         {activeTab === 'stock' && (
-          <div className="space-y-5">
-            {/* 3 Compact Top Summary Cards (3 columns in mobile landscape too) */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 landscape:grid-cols-3 gap-3.5">
-              <div
-                onClick={() => setFilterEstado('proximo_vencer')}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-amber-400/50 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Próximos a Vencer
-                  </span>
-                  <Clock className="h-4 w-4 text-amber-400" />
-                </div>
-                <div className="mt-1 flex items-baseline">
-                  <span
-                    className={`text-2xl font-bold ${
-                      kpis.proximosCount > 0 ? 'text-amber-400' : 'text-foreground'
-                    }`}
-                  >
-                    {kpis.proximosCount}
-                  </span>
-                </div>
-              </div>
-
-              <div
-                onClick={() => setFilterEstado('vencidos_sin_stock')}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-red-400/50 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Vencidos / Sin Stock
-                  </span>
-                  <AlertTriangle className="h-4 w-4 text-red-400" />
-                </div>
-                <div className="mt-1 flex items-baseline space-x-2">
-                  <span
-                    className={`text-2xl font-bold ${
-                      kpis.vencidosCount > 0 ? 'text-red-400' : 'text-foreground'
-                    }`}
-                  >
-                    {kpis.vencidosCount}
-                  </span>
-                  <span className="text-muted-foreground">/</span>
-                  <span
-                    className={`text-2xl font-bold ${
-                      kpis.sinStockCount > 0 ? 'text-rose-400' : 'text-foreground'
-                    }`}
-                  >
-                    {kpis.sinStockCount}
-                  </span>
-                </div>
-              </div>
-
-              <div
-                onClick={() => navigateToSection('configuracion', 'esenciales')}
-                className="cursor-pointer rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3 hover:border-primary/50 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Primera Necesidad
-                  </span>
-                  <Star className="h-4 w-4 text-primary" />
-                </div>
-                <div className="mt-1 flex items-baseline">
-                  <span className="text-2xl font-bold text-foreground">
-                    {kpis.esencialesCubiertos} de {kpis.esencialesTotal}
-                  </span>
-                </div>
-              </div>
-            </div>
-
+          <div className="space-y-4">
             {/* Filters & Search Bar */}
-            <div className="flex flex-col space-y-3 rounded-xl border border-[#323846] bg-[#171a22] p-3.5">
+            <div className="flex flex-col space-y-3 rounded-2xl border border-[#2b313f] bg-[#141720] p-4">
               <div className="flex flex-col md:flex-row landscape:flex-row gap-2.5">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   <div className="relative flex-1">
@@ -2291,10 +2221,10 @@ export default function BotiquinAppClient({
               </div>
             </div>
 
-            {/* Medications Grid (2 cols in mobile landscape, 3 in desktop) */}
+            {/* Medications Table / Minimalist View */}
             {filteredMeds.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#343a48] bg-[#171a22]/70 p-10 text-center">
-                <Pill className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
+              <div className="rounded-2xl border border-dashed border-[#2f3545] bg-[#141721] p-12 text-center">
+                <Pill className="mx-auto h-10 w-10 text-muted-foreground/40 mb-3" />
                 <h3 className="text-base font-semibold text-foreground">
                   No hay medicamentos en esta vista
                 </h3>
@@ -2308,50 +2238,435 @@ export default function BotiquinAppClient({
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 landscape:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredMeds.map((med) => {
-                  const diasVenc = calcularDiasVencimiento(med.fecha_vencimiento)
-                  const vencido = diasVenc !== null && diasVenc < 0
-                  const proximo =
-                    diasVenc !== null &&
-                    diasVenc >= 0 &&
-                    diasVenc <= (state.config.dias_proximo_vencer || 30)
-                  const sinStock = med.cantidad_actual <= 0
-                  const pct =
-                    med.cantidad_inicial > 0
-                      ? Math.min(100, Math.round((med.cantidad_actual / med.cantidad_inicial) * 100))
-                      : med.cantidad_actual > 0
-                      ? 100
-                      : 0
+              <div className="space-y-4">
+                {/* DESKTOP TABLE VIEW */}
+                <div className="hidden md:block rounded-2xl border border-[#2c3240] bg-[#141720] shadow-sm">
+                  <table className="w-full table-fixed text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#252b38] bg-[#10131a] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        <th className="w-[7%] py-3 pl-4 pr-1 text-center">Foto</th>
+                        <th className="w-[30%] py-3 px-3">Medicamento</th>
+                        <th className="w-[18%] py-3 px-2">Categoría & Público</th>
+                        <th className="w-[15%] py-3 px-2 text-center">Stock</th>
+                        <th className="w-[12%] py-3 px-2 text-center">Vencimiento</th>
+                        <th className="w-[18%] py-3 pl-2 pr-4 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#212633] text-xs">
+                      {filteredMeds.map((med) => {
+                        const diasVenc = calcularDiasVencimiento(med.fecha_vencimiento)
+                        const vencido = diasVenc !== null && diasVenc < 0
+                        const proximo =
+                          diasVenc !== null &&
+                          diasVenc >= 0 &&
+                          diasVenc <= (state.config.dias_proximo_vencer || 30)
+                        const sinStock = med.cantidad_actual <= 0
+                        const pct =
+                          med.cantidad_inicial > 0
+                            ? Math.min(100, Math.round((med.cantidad_actual / med.cantidad_inicial) * 100))
+                            : med.cantidad_actual > 0
+                            ? 100
+                            : 0
 
-                  const allPhotos =
-                    med.fotos_urls && med.fotos_urls.length > 0
-                      ? med.fotos_urls
-                      : med.foto_url
-                      ? [med.foto_url]
-                      : []
+                        const allPhotos =
+                          med.fotos_urls && med.fotos_urls.length > 0
+                            ? med.fotos_urls
+                            : med.foto_url
+                            ? [med.foto_url]
+                            : []
 
-                  const sintomasResumidos = resumirSintomas(med.para_que_sirve)
-                  const isFuncionOpen =
-                    activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'funcion'
-                  const isDosisOpen =
-                    activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'dosis'
+                        const sintomasResumidos = resumirSintomas(med.para_que_sirve)
+                        const isFuncionOpen =
+                          activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'funcion'
+                        const isDosisOpen =
+                          activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'dosis'
 
-                  return (
-                    <div
-                      key={med.id}
-                      className={`flex flex-col justify-between rounded-2xl border bg-[#171a22] p-4 shadow-md transition-all ${
-                        vencido
-                          ? 'border-red-400/50'
-                          : proximo
-                          ? 'border-amber-400/45'
-                          : sinStock
-                          ? 'border-rose-400/40 opacity-90'
-                          : 'border-[#323846] hover:border-zinc-500'
-                      }`}
-                    >
-                      <div className="space-y-3">
-                        {/* Header row: Photo + Badges */}
+                        return (
+                          <tr
+                            key={med.id}
+                            className={`transition-colors hover:bg-[#1a1e29] ${
+                              med.estado !== 'activo' ? 'opacity-60 bg-red-950/10' : ''
+                            }`}
+                          >
+                            {/* 1. Foto */}
+                            <td className="py-2.5 pl-4 pr-1 text-center align-middle">
+                              {allPhotos.length > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLightboxPhotos(allPhotos)
+                                    setLightboxIndex(0)
+                                  }}
+                                  className="relative inline-block h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-[#303646] bg-[#0e1016] group"
+                                  title="Ver foto"
+                                >
+                                  <img
+                                    src={allPhotos[0]}
+                                    alt={med.nombre}
+                                    className="h-full w-full object-cover group-hover:scale-110 transition-transform"
+                                  />
+                                  {allPhotos.length > 1 && (
+                                    <span className="absolute bottom-0 right-0 bg-black/80 px-1 text-[9px] font-bold text-white leading-none">
+                                      +{allPhotos.length - 1}
+                                    </span>
+                                  )}
+                                </button>
+                              ) : (
+                                <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#2b303d] bg-[#0e1016] text-muted-foreground/50">
+                                  {med.unidad === 'ml' || med.unidad === 'gotas' ? (
+                                    <Droplets className="h-4 w-4 text-sky-400/80" />
+                                  ) : (
+                                    <Pill className="h-4 w-4 text-zinc-400" />
+                                  )}
+                                </div>
+                              )}
+                            </td>
+
+                            {/* 2. Medicamento */}
+                            <td className="py-2.5 px-3 align-middle">
+                              <div className="font-semibold text-zinc-100 text-sm leading-snug truncate" title={med.nombre}>
+                                {formatEspacioMedida(med.nombre)}
+                              </div>
+                              <div className="text-xs text-muted-foreground truncate mt-0.5" title={med.droga}>
+                                {formatEspacioMedida(med.droga) || 'Sin especificar'}
+                                {med.concentracion ? ` • ${formatEspacioMedida(med.concentracion)}` : ''}
+                              </div>
+                            </td>
+
+                            {/* 3. Categoría & Público */}
+                            <td className="py-2.5 px-2 align-middle">
+                              <div className="flex flex-col gap-1 items-start">
+                                <span className="inline-block rounded-md bg-[#202532] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[150px]">
+                                  {med.categoria}
+                                </span>
+                                {med.publico === 'pediatrico' ? (
+                                  <span className="inline-flex items-center space-x-1 rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 border border-sky-500/20">
+                                    <Baby className="h-2.5 w-2.5" />
+                                    <span>Pediátrico</span>
+                                  </span>
+                                ) : med.publico === 'adulto' ? (
+                                  <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800/90 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 border border-zinc-700">
+                                    <User className="h-2.5 w-2.5" />
+                                    <span>Adultos</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800/60 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 border border-zinc-700/60">
+                                    <Users className="h-2.5 w-2.5" />
+                                    <span>Ambos</span>
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* 4. Stock */}
+                            <td className="py-2.5 px-2 text-center align-middle">
+                              <div className="font-semibold text-xs">
+                                <span
+                                  className={
+                                    sinStock
+                                      ? 'text-red-400'
+                                      : med.cantidad_actual <= med.stock_minimo
+                                      ? 'text-amber-400'
+                                      : 'text-zinc-200'
+                                  }
+                                >
+                                  {med.cantidad_actual} {med.unidad}
+                                </span>
+                                {med.cantidad_inicial > 0 && (
+                                  <span className="text-muted-foreground font-normal text-[11px]">
+                                    {' '}/ {med.cantidad_inicial}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-1 flex items-center justify-center gap-1.5">
+                                <div className="h-1.5 w-16 rounded-full bg-[#0e1016] border border-[#2b303d] overflow-hidden">
+                                  <div
+                                    className={`h-full ${
+                                      sinStock
+                                        ? 'bg-red-500'
+                                        : med.cantidad_actual <= med.stock_minimo
+                                        ? 'bg-amber-400'
+                                        : 'bg-emerald-500'
+                                    }`}
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <span className="text-[10px] text-muted-foreground">{pct}%</span>
+                              </div>
+                            </td>
+
+                            {/* 5. Vencimiento */}
+                            <td className="py-2.5 px-2 text-center align-middle">
+                              <span
+                                className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
+                                  vencido
+                                    ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                    : proximo
+                                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                    : 'text-zinc-300'
+                                }`}
+                              >
+                                {formatMesAnio(med.fecha_vencimiento)}
+                              </span>
+                              {vencido ? (
+                                <span className="block text-[10px] text-red-400 mt-0.5">Vencido</span>
+                              ) : proximo ? (
+                                <span className="block text-[10px] text-amber-400 mt-0.5">Próx. a vencer</span>
+                              ) : null}
+                            </td>
+
+                            {/* 6. Acciones */}
+                            <td className="py-2.5 pl-2 pr-4 text-right align-middle">
+                              {med.estado === 'activo' ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  {/* Función */}
+                                  <div className="relative inline-block">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setActiveCardTooltip((prev) =>
+                                          prev?.medId === med.id && prev?.field === 'funcion'
+                                            ? null
+                                            : { medId: med.id, field: 'funcion' }
+                                        )
+                                      }}
+                                      className={`px-2 py-1 rounded-lg text-xs font-medium ${
+                                        isFuncionOpen ? greyBtnActive : greyBtn
+                                      }`}
+                                    >
+                                      <span>Función</span>
+                                    </button>
+                                    {isFuncionOpen && (
+                                      <div
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="absolute right-0 bottom-full mb-1.5 z-50 w-64 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
+                                      >
+                                        <strong className="text-zinc-300 block mb-0.5">Función:</strong>
+                                        {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Dosis */}
+                                  <div className="relative inline-block">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setActiveCardTooltip((prev) =>
+                                          prev?.medId === med.id && prev?.field === 'dosis'
+                                            ? null
+                                            : { medId: med.id, field: 'dosis' }
+                                        )
+                                      }}
+                                      className={`px-2 py-1 rounded-lg text-xs font-medium ${
+                                        isDosisOpen ? greyBtnActive : greyBtn
+                                      }`}
+                                    >
+                                      <span>Dosis</span>
+                                    </button>
+                                    {isDosisOpen && (
+                                      <div
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="absolute right-0 bottom-full mb-1.5 z-50 w-72 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
+                                      >
+                                        <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
+                                        <span>{med.posologia_referencia || 'Sin especificar'}</span>
+                                        {(() => {
+                                          const miembrosPediatricosConPeso = (state.familia || []).filter(
+                                            (f) =>
+                                              f.peso_kg &&
+                                              f.peso_kg > 0 &&
+                                              calcularEdadDesdeFecha(f.fecha_nacimiento).esPediatrico
+                                          )
+                                          const todosConPeso =
+                                            miembrosPediatricosConPeso.length > 0
+                                              ? miembrosPediatricosConPeso
+                                              : (state.familia || []).filter(
+                                                  (f) => f.peso_kg && f.peso_kg > 0 && f.peso_kg <= 40
+                                                )
+
+                                          if (todosConPeso.length > 0) {
+                                            const calculos = todosConPeso
+                                              .map((f) => ({
+                                                miembro: f,
+                                                calc: calcularDosisPediatricaPorPeso(med, f.peso_kg),
+                                              }))
+                                              .filter((x) => x.calc !== null)
+
+                                            if (calculos.length === 0) return null
+                                            return (
+                                              <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-1">
+                                                <strong className="text-emerald-300 text-[11px] block">
+                                                  Dosis sugerida por peso:
+                                                </strong>
+                                                {calculos.map(({ miembro, calc }) => (
+                                                  <span
+                                                    key={miembro.id}
+                                                    className="block text-[11px] text-zinc-200"
+                                                  >
+                                                    <strong>{miembro.nombre}</strong> ({miembro.peso_kg} kg):{' '}
+                                                    <strong className="text-white">{calc!.dosisTexto}</strong>
+                                                  </span>
+                                                ))}
+                                              </span>
+                                            )
+                                          }
+
+                                          const ref10 = calcularDosisPediatricaPorPeso(med, 10)
+                                          const ref15 = calcularDosisPediatricaPorPeso(med, 15)
+                                          if (!ref10 || !ref15) return null
+                                          return (
+                                            <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-0.5">
+                                              <strong className="text-emerald-300 text-[11px] block">
+                                                Guía por peso ({ref10.formula}):
+                                              </strong>
+                                              <span className="block text-[11px] text-zinc-200">
+                                                • 10 kg: <strong>{ref10.dosisTexto}</strong>
+                                              </span>
+                                              <span className="block text-[11px] text-zinc-200">
+                                                • 15 kg: <strong>{ref15.dosisTexto}</strong>
+                                              </span>
+                                            </span>
+                                          )
+                                        })()}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* - */}
+                                  <button
+                                    type="button"
+                                    disabled={med.cantidad_actual <= 0}
+                                    onClick={() => {
+                                      setDosisModalMed(med)
+                                      setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
+                                      setDosisMotivo('')
+                                      setDosisFamiliarId(
+                                        state.familia && state.familia.length > 0
+                                          ? state.familia[0].id
+                                          : ''
+                                      )
+                                    }}
+                                    title="Descontar dosis"
+                                    className={`h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
+                                  >
+                                    -
+                                  </button>
+
+                                  {/* + */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReponerModalMed(med)
+                                      setReponerCantidad(med.cantidad_inicial || 10)
+                                      setReponerVencimiento(med.fecha_vencimiento || '')
+                                    }}
+                                    title="Reponer Stock"
+                                    className={`h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold ${greyBtn}`}
+                                  >
+                                    +
+                                  </button>
+
+                                  {/* Edit */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditMedModal(med)}
+                                    title="Editar"
+                                    className={`p-1.5 rounded-lg ${greyBtn}`}
+                                  >
+                                    <Edit3 className="h-3.5 w-3.5" />
+                                  </button>
+
+                                  {/* Delete */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBajaModalMed(med)
+                                      setBajaMotivo(vencido ? 'vencido' : 'tirado')
+                                      setBajaDetalle('')
+                                    }}
+                                    title="Eliminar / Dar de baja"
+                                    className={`p-1.5 rounded-lg text-zinc-400 hover:text-red-300 ${greyBtn}`}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-end space-x-2 text-xs">
+                                  <span className="text-red-300 font-medium">
+                                    Baja ({med.motivo_baja || 'descartado'})
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setReponerModalMed(med)
+                                      setReponerCantidad(med.cantidad_inicial || 10)
+                                      setReponerVencimiento('')
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                                  >
+                                    Reactivar
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeletePermanent(med.id, med.nombre)}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* MOBILE / SMALL SCREENS VIEW */}
+                <div className="md:hidden space-y-3">
+                  {filteredMeds.map((med) => {
+                    const diasVenc = calcularDiasVencimiento(med.fecha_vencimiento)
+                    const vencido = diasVenc !== null && diasVenc < 0
+                    const proximo =
+                      diasVenc !== null &&
+                      diasVenc >= 0 &&
+                      diasVenc <= (state.config.dias_proximo_vencer || 30)
+                    const sinStock = med.cantidad_actual <= 0
+                    const pct =
+                      med.cantidad_inicial > 0
+                        ? Math.min(100, Math.round((med.cantidad_actual / med.cantidad_inicial) * 100))
+                        : med.cantidad_actual > 0
+                        ? 100
+                        : 0
+
+                    const allPhotos =
+                      med.fotos_urls && med.fotos_urls.length > 0
+                        ? med.fotos_urls
+                        : med.foto_url
+                        ? [med.foto_url]
+                        : []
+
+                    const sintomasResumidos = resumirSintomas(med.para_que_sirve)
+                    const isFuncionOpen =
+                      activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'funcion'
+                    const isDosisOpen =
+                      activeCardTooltip?.medId === med.id && activeCardTooltip?.field === 'dosis'
+
+                    return (
+                      <div
+                        key={med.id}
+                        className={`rounded-2xl border bg-[#141720] p-3.5 space-y-3 shadow-sm transition-colors ${
+                          vencido
+                            ? 'border-red-500/40'
+                            : proximo
+                            ? 'border-amber-500/40'
+                            : sinStock
+                            ? 'border-zinc-700/80'
+                            : 'border-[#292f3d]'
+                        }`}
+                      >
                         <div className="flex items-start gap-3">
                           {allPhotos.length > 0 ? (
                             <button
@@ -2360,303 +2675,197 @@ export default function BotiquinAppClient({
                                 setLightboxPhotos(allPhotos)
                                 setLightboxIndex(0)
                               }}
-                              className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[#323846] bg-[#0e1016] relative group"
+                              className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-[#303646] bg-[#0e1016]"
                             >
-                              <img
-                                src={allPhotos[0]}
-                                alt={med.nombre}
-                                className="h-full w-full object-cover group-hover:scale-105 transition-transform"
-                              />
+                              <img src={allPhotos[0]} alt={med.nombre} className="h-full w-full object-cover" />
                               {allPhotos.length > 1 && (
-                                <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-bold text-white flex items-center">
-                                  <Images className="h-2.5 w-2.5 mr-0.5" />
-                                  <span>{allPhotos.length}</span>
+                                <span className="absolute bottom-0.5 right-0.5 bg-black/80 px-1 text-[9px] font-bold text-white rounded">
+                                  +{allPhotos.length - 1}
                                 </span>
                               )}
                             </button>
                           ) : (
-                            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-[#323846] bg-[#0e1016] text-muted-foreground">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#2b303d] bg-[#0e1016] text-muted-foreground/50">
                               {med.unidad === 'ml' || med.unidad === 'gotas' ? (
-                                <Droplets className="h-6 w-6 text-sky-400" />
+                                <Droplets className="h-5 w-5 text-sky-400/80" />
                               ) : (
-                                <Pill className="h-6 w-6 text-primary" />
+                                <Pill className="h-5 w-5 text-zinc-400" />
                               )}
                             </div>
                           )}
 
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                              {med.publico === 'pediatrico' ? (
-                                <span className="inline-flex items-center space-x-1 rounded-md bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold text-sky-300 border border-sky-500/30">
-                                  <Baby className="h-3 w-3" />
-                                  <span>Pediátrico</span>
-                                </span>
-                              ) : med.publico === 'adulto' ? (
-                                <span className="inline-flex items-center space-x-1 rounded-md bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold text-violet-300 border border-violet-500/30">
-                                  <User className="h-3 w-3" />
-                                  <span>Adultos</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center space-x-1 rounded-md bg-red-400/15 px-2 py-0.5 text-[11px] font-semibold text-red-300 border border-red-400/30">
-                                  <Users className="h-3 w-3" />
-                                  <span>Ambos</span>
-                                </span>
-                              )}
-
-                              <span className="rounded-md bg-[#232733] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[130px]">
-                                {med.categoria}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-1">
+                              <h3 className="font-semibold text-zinc-100 text-sm leading-snug truncate">
+                                {formatEspacioMedida(med.nombre)}
+                              </h3>
+                              <span
+                                className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold ${
+                                  vencido
+                                    ? 'bg-red-500/15 text-red-300'
+                                    : proximo
+                                    ? 'bg-amber-500/15 text-amber-300'
+                                    : 'text-zinc-400'
+                                }`}
+                              >
+                                {formatMesAnio(med.fecha_vencimiento)}
                               </span>
                             </div>
-
-                            <h3 className="group/nombre relative text-base font-bold text-foreground leading-snug cursor-default">
-                              <span className="block truncate">
-                                {formatEspacioMedida(med.nombre)}
-                              </span>
-                              <span className="pointer-events-none absolute left-0 bottom-full mb-1.5 hidden group-hover/nombre:block z-50 w-max max-w-[260px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-2xl whitespace-normal break-words">
-                                {formatEspacioMedida(med.nombre)}
-                              </span>
-                            </h3>
                             <p className="text-xs text-muted-foreground truncate mt-0.5">
-                              {formatEspacioMedida(med.droga) || 'Sin especificar'}{' '}
-                              {med.concentracion
-                                ? `• ${formatEspacioMedida(med.concentracion)}`
-                                : ''}
+                              {formatEspacioMedida(med.droga) || 'Sin especificar'}
+                              {med.concentracion ? ` • ${formatEspacioMedida(med.concentracion)}` : ''}
                             </p>
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <span className="rounded bg-[#202532] px-2 py-0.5 text-[10px] text-zinc-300 truncate max-w-[120px]">
+                                {med.categoria}
+                              </span>
+                              <span className="text-[11px] text-zinc-400">
+                                Stock:{' '}
+                                <strong className={sinStock ? 'text-red-400' : 'text-zinc-200'}>
+                                  {med.cantidad_actual} {med.unidad}
+                                </strong>{' '}
+                                ({pct}%)
+                              </span>
+                            </div>
                           </div>
                         </div>
 
-                        {/* Disponibilidad: 75% | Vencimiento: 12/2027 ('|' exactly centered) */}
-                        <div className="rounded-xl bg-[#0e1016] border border-[#2b303d] px-3 py-2 text-xs grid grid-cols-[1fr_auto_1fr] items-center">
-                          <span className="text-center truncate">
-                            <span className="text-muted-foreground">Disponibilidad:</span>{' '}
-                            <strong
-                              className={
-                                sinStock
-                                  ? 'text-red-400'
-                                  : med.cantidad_actual <= med.stock_minimo
-                                  ? 'text-amber-400'
-                                  : 'text-foreground'
-                              }
-                            >
-                              {pct}%
-                            </strong>
-                          </span>
-                          <span className="text-zinc-500 px-2 select-none text-center">|</span>
-                          <span className="text-center truncate">
-                            <span className="text-muted-foreground">Vencimiento:</span>{' '}
-                            <strong
-                              className={
-                                vencido
-                                  ? 'text-red-400'
-                                  : proximo
-                                  ? 'text-amber-400'
-                                  : 'text-foreground'
-                              }
-                            >
-                              {formatMesAnio(med.fecha_vencimiento)}
-                            </strong>
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Card Footer Actions: Función | Dosis | - | + | Editar | Eliminar */}
-                      {med.estado === 'activo' ? (
-                        <div className="mt-3.5 pt-3 border-t border-[#282d3a] flex items-center justify-between gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setActiveCardTooltip((prev) =>
-                                prev?.medId === med.id && prev?.field === 'funcion'
-                                  ? null
-                                  : { medId: med.id, field: 'funcion' }
-                              )
-                            }}
-                            className={`group/sirve relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${
-                              isFuncionOpen ? greyBtnActive : greyBtn
-                            }`}
-                          >
-                            <span>Función</span>
-                            <span
-                              className={`pointer-events-none absolute left-0 bottom-full mb-1.5 ${
-                                isFuncionOpen
-                                  ? 'block'
-                                  : 'hidden md:group-hover/sirve:block'
-                              } z-50 w-max max-w-[250px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
-                            >
-                              <strong className="text-red-300 block mb-0.5">Función:</strong>
-                              {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
-                            </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setActiveCardTooltip((prev) =>
-                                prev?.medId === med.id && prev?.field === 'dosis'
-                                  ? null
-                                  : { medId: med.id, field: 'dosis' }
-                              )
-                            }}
-                            className={`group/dosis relative flex-1 flex items-center justify-center rounded-lg px-2 py-1.5 text-xs font-medium ${
-                              isDosisOpen ? greyBtnActive : greyBtn
-                            }`}
-                          >
-                            <span>Dosis</span>
-                            <span
-                              className={`pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 ${
-                                isDosisOpen
-                                  ? 'block'
-                                  : 'hidden md:group-hover/dosis:block'
-                              } z-50 w-max max-w-[270px] rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed`}
-                            >
-                              <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
-                              <span>{med.posologia_referencia || 'Sin especificar'}</span>
-                              {(() => {
-                                const miembrosPediatricosConPeso = (state.familia || []).filter(
-                                  (f) =>
-                                    f.peso_kg &&
-                                    f.peso_kg > 0 &&
-                                    calcularEdadDesdeFecha(f.fecha_nacimiento).esPediatrico
-                                )
-                                const todosConPeso =
-                                  miembrosPediatricosConPeso.length > 0
-                                    ? miembrosPediatricosConPeso
-                                    : (state.familia || []).filter(
-                                        (f) => f.peso_kg && f.peso_kg > 0 && f.peso_kg <= 40
-                                      )
-
-                                if (todosConPeso.length > 0) {
-                                  const calculos = todosConPeso
-                                    .map((f) => ({
-                                      miembro: f,
-                                      calc: calcularDosisPediatricaPorPeso(med, f.peso_kg),
-                                    }))
-                                    .filter((x) => x.calc !== null)
-
-                                  if (calculos.length === 0) return null
-                                  return (
-                                    <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-1">
-                                      <strong className="text-emerald-300 text-[11px] block">
-                                        🧮 Dosis sugerida por peso:
-                                      </strong>
-                                      {calculos.map(({ miembro, calc }) => (
-                                        <span
-                                          key={miembro.id}
-                                          className="block text-[11px] text-zinc-200"
-                                        >
-                                          {obtenerEmojiFamiliar(miembro)} <strong>{miembro.nombre}</strong> ({miembro.peso_kg} kg):{' '}
-                                          <strong className="text-white">{calc!.dosisTexto}</strong>
-                                        </span>
-                                      ))}
-                                    </span>
+                        {/* Actions */}
+                        {med.estado === 'activo' ? (
+                          <div className="pt-2.5 border-t border-[#232733] flex items-center justify-between gap-1.5">
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setActiveCardTooltip((prev) =>
+                                    prev?.medId === med.id && prev?.field === 'funcion'
+                                      ? null
+                                      : { medId: med.id, field: 'funcion' }
                                   )
-                                }
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium ${
+                                  isFuncionOpen ? greyBtnActive : greyBtn
+                                }`}
+                              >
+                                <span>Función</span>
+                              </button>
+                              {isFuncionOpen && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute left-0 bottom-full mb-1.5 z-50 w-60 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl"
+                                >
+                                  <strong className="text-zinc-300 block mb-0.5">Función:</strong>
+                                  {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
+                                </div>
+                              )}
+                            </div>
 
-                                // Referencia por peso 10 kg / 15 kg si es pediátrico y aún no cargaron peso
-                                const ref10 = calcularDosisPediatricaPorPeso(med, 10)
-                                const ref15 = calcularDosisPediatricaPorPeso(med, 15)
-                                if (!ref10 || !ref15) return null
-                                return (
-                                  <span className="mt-1.5 pt-1.5 border-t border-[#343a48] block space-y-0.5">
-                                    <strong className="text-emerald-300 text-[11px] block">
-                                      🧮 Guía rápida por peso ({ref10.formula}):
-                                    </strong>
-                                    <span className="block text-[11px] text-zinc-200">
-                                      • 10 kg: <strong>{ref10.dosisTexto}</strong>
-                                    </span>
-                                    <span className="block text-[11px] text-zinc-200">
-                                      • 15 kg: <strong>{ref15.dosisTexto}</strong>
-                                    </span>
-                                  </span>
-                                )
-                              })()}
-                            </span>
-                          </button>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setActiveCardTooltip((prev) =>
+                                    prev?.medId === med.id && prev?.field === 'dosis'
+                                      ? null
+                                      : { medId: med.id, field: 'dosis' }
+                                  )
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium ${
+                                  isDosisOpen ? greyBtnActive : greyBtn
+                                }`}
+                              >
+                                <span>Dosis</span>
+                              </button>
+                              {isDosisOpen && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute left-0 bottom-full mb-1.5 z-50 w-64 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl"
+                                >
+                                  <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
+                                  <span>{med.posologia_referencia || 'Sin especificar'}</span>
+                                </div>
+                              )}
+                            </div>
 
-                          <button
-                            type="button"
-                            disabled={med.cantidad_actual <= 0}
-                            onClick={() => {
-                              setDosisModalMed(med)
-                              setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
-                              setDosisMotivo('')
-                              setDosisFamiliarId(
-                                state.familia && state.familia.length > 0
-                                  ? state.familia[0].id
-                                  : ''
-                              )
-                            }}
-                            title="Usar / Descontar dosis"
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
-                          >
-                            -
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReponerModalMed(med)
-                              setReponerCantidad(med.cantidad_inicial || 10)
-                              setReponerVencimiento(med.fecha_vencimiento || '')
-                            }}
-                            title="Reponer Stock"
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold ${greyBtn}`}
-                          >
-                            +
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => openEditMedModal(med)}
-                            title="Editar"
-                            className={`p-1.5 rounded-lg ${greyBtn}`}
-                          >
-                            <Edit3 className="h-3.5 w-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setBajaModalMed(med)
-                              setBajaMotivo(vencido ? 'vencido' : 'tirado')
-                              setBajaDetalle('')
-                            }}
-                            title="Eliminar / Dar de baja"
-                            className={`p-1.5 rounded-lg ${greyBtn}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="mt-3.5 pt-3 border-t border-[#282d3a] flex items-center justify-between text-xs">
-                          <span className="text-red-300 font-medium">
-                            Baja ({med.motivo_baja || 'descartado'})
-                          </span>
-                          <div className="flex items-center space-x-2">
                             <button
+                              type="button"
+                              disabled={med.cantidad_actual <= 0}
+                              onClick={() => {
+                                setDosisModalMed(med)
+                                setDosisCantidad(med.unidad === 'ml' ? 5 : 1)
+                                setDosisMotivo('')
+                                setDosisFamiliarId(
+                                  state.familia && state.familia.length > 0
+                                    ? state.familia[0].id
+                                    : ''
+                                )
+                              }}
+                              className={`h-8 w-8 flex items-center justify-center rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
+                            >
+                              -
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => {
                                 setReponerModalMed(med)
                                 setReponerCantidad(med.cantidad_inicial || 10)
-                                setReponerVencimiento('')
+                                setReponerVencimiento(med.fecha_vencimiento || '')
                               }}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                              className={`h-8 w-8 flex items-center justify-center rounded-lg text-xs font-bold ${greyBtn}`}
                             >
-                              Reactivar
+                              +
                             </button>
+
                             <button
-                              onClick={() => handleDeletePermanent(med.id, med.nombre)}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                              type="button"
+                              onClick={() => openEditMedModal(med)}
+                              className={`p-2 rounded-lg ${greyBtn}`}
                             >
-                              Eliminar
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBajaModalMed(med)
+                                setBajaMotivo(vencido ? 'vencido' : 'tirado')
+                                setBajaDetalle('')
+                              }}
+                              className={`p-2 rounded-lg text-zinc-400 hover:text-red-300 ${greyBtn}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+                        ) : (
+                          <div className="pt-2 border-t border-[#232733] flex items-center justify-between text-xs">
+                            <span className="text-red-300 font-medium">Baja</span>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() => {
+                                  setReponerModalMed(med)
+                                  setReponerCantidad(med.cantidad_inicial || 10)
+                                  setReponerVencimiento('')
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                              >
+                                Reactivar
+                              </button>
+                              <button
+                                onClick={() => handleDeletePermanent(med.id, med.nombre)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-medium ${greyBtn}`}
+                              >
+                                Eliminar
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -3198,18 +3407,18 @@ export default function BotiquinAppClient({
                     totalViaje > 0 ? Math.round((enValijaCount / totalViaje) * 100) : 0
 
                   return (
-                    <div className="rounded-xl border border-[#323846] bg-[#171a22] px-4 py-3">
-                      <div className="flex items-center justify-between text-xs mb-1.5">
-                        <span className="text-muted-foreground font-medium">
-                          Progreso de preparación del bolso:
+                    <div className="rounded-2xl border border-[#2b303d] bg-[#141720] px-5 py-4">
+                      <div className="flex items-center justify-between text-xs mb-2">
+                        <span className="text-zinc-400 font-medium">
+                          Progreso del bolso:
                         </span>
-                        <strong className="text-foreground font-bold">
-                          {enValijaCount} de {totalViaje} empacados ({pctEmpacado}%)
+                        <strong className="text-zinc-100 font-bold">
+                          {enValijaCount} de {totalViaje} guardados ({pctEmpacado}%)
                         </strong>
                       </div>
-                      <div className="h-2.5 w-full rounded-full bg-[#0e1016] overflow-hidden border border-[#2b303d]">
+                      <div className="h-2 w-full rounded-full bg-[#0e1016] overflow-hidden border border-[#282d39]">
                         <div
-                          className="h-full bg-gradient-to-r from-zinc-500 to-emerald-400 transition-all duration-300"
+                          className="h-full bg-emerald-500 transition-all duration-300"
                           style={{ width: `${pctEmpacado}%` }}
                         />
                       </div>
@@ -3218,9 +3427,9 @@ export default function BotiquinAppClient({
                 })()}
 
                 {/* Checklist Container */}
-                <div className="rounded-2xl border border-[#323846] bg-[#171a22] p-4 sm:p-5 space-y-4">
+                <div className="rounded-2xl border border-[#2b303d] bg-[#141720] p-4 sm:p-5 space-y-4">
                   {/* Checklist Filter Toolbar */}
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#2c313f]">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#242935]">
                     <div className="flex items-center space-x-1.5 overflow-x-auto">
                       {[
                         { id: 'todos', label: `Todos (${viajeChecklist.length})` },
@@ -3263,7 +3472,7 @@ export default function BotiquinAppClient({
                     <button
                       type="button"
                       onClick={() => setMostrarFormNuevoItemViaje(!mostrarFormNuevoItemViaje)}
-                      className={`shrink-0 flex items-center space-x-1 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                      className={`shrink-0 flex items-center space-x-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
                     >
                       <Plus className="h-3.5 w-3.5" />
                       <span>Agregar Ítem</span>
@@ -3355,91 +3564,101 @@ export default function BotiquinAppClient({
                     }
 
                     return (
-                      <div className="space-y-2">
+                      <div className="space-y-2.5">
                         {itemsFiltrados.map((item) => {
                           const isPacked = packedViajeIds.includes(item.id)
                           return (
                             <div
                               key={item.id}
-                              className={`rounded-xl border p-3 transition-colors flex items-start justify-between gap-3 ${
+                              className={`rounded-2xl border p-4 transition-all flex items-start justify-between gap-3.5 ${
                                 isPacked
-                                  ? 'border-emerald-500/30 bg-[#12181d]'
-                                  : item.cubierto
-                                  ? 'border-[#343a48] bg-[#141822]'
-                                  : 'border-primary/35 bg-primary/5'
+                                  ? 'border-[#222733] bg-[#111319] opacity-60'
+                                  : 'border-[#282e3b] bg-[#151822] hover:border-[#384050]'
                               }`}
                             >
-                              <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                              <div className="flex items-start gap-3 min-w-0 flex-1">
                                 <input
                                   type="checkbox"
                                   checked={isPacked}
                                   onChange={() => togglePackedViajeItem(item.id)}
-                                  title="Marcar como guardado en el bolso / valija"
-                                  className="mt-1 h-4 w-4 rounded border-[#4a5264] accent-[#10b981] cursor-pointer shrink-0"
+                                  title="Marcar como guardado en la valija"
+                                  className="mt-0.5 h-4 w-4 rounded border-[#4a5264] accent-emerald-500 cursor-pointer shrink-0"
                                 />
-                                <div className="min-w-0 flex-1 space-y-1">
-                                  <div className="flex items-center flex-wrap gap-1.5">
+                                <div className="min-w-0 flex-1 space-y-1.5">
+                                  <div className="flex items-center flex-wrap gap-2">
                                     <span
-                                      className={`text-xs font-bold ${
+                                      className={`text-sm font-semibold ${
                                         isPacked
                                           ? 'line-through text-muted-foreground'
-                                          : 'text-foreground'
+                                          : 'text-zinc-100'
                                       }`}
                                     >
                                       {item.nombre}
                                     </span>
-                                    <span className="text-sm leading-none select-none">
-                                      {item.publico === 'pediatrico'
-                                        ? '👶'
-                                        : item.publico === 'ambos'
-                                        ? '👨‍👩‍👧'
-                                        : '🧑'}
-                                    </span>
+                                    {item.publico === 'pediatrico' ? (
+                                      <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300 font-medium border border-sky-500/20">
+                                        Pediátrico
+                                      </span>
+                                    ) : item.publico === 'adulto' ? (
+                                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300 font-medium border border-zinc-700">
+                                        Adultos
+                                      </span>
+                                    ) : item.publico === 'ambos' ? (
+                                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400 font-medium border border-zinc-700/60">
+                                        Familia
+                                      </span>
+                                    ) : null}
+
                                     {item.origen === 'viaje' && (
-                                      <span className="rounded-md bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-300">
-                                        ✈️ Extra Viaje
+                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                        Viaje
                                       </span>
                                     )}
                                     {item.origen === 'esencial' && (
-                                      <span className="rounded-md bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300">
-                                        ⭐ Esencial
+                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                        Esencial
                                       </span>
                                     )}
                                     {item.origen === 'personalizado' && (
-                                      <span className="rounded-md bg-amber-500/15 border border-amber-400/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
-                                        📝 Personalizado
+                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                        Personalizado
                                       </span>
                                     )}
                                   </div>
 
-                                  <p className="text-[11px] text-muted-foreground">
-                                    <strong className="text-zinc-300">{item.droga}</strong>
+                                  <p className="text-xs text-muted-foreground leading-snug">
+                                    <strong className="text-zinc-300 font-medium">{item.droga}</strong>
                                     {item.descripcion ? ` • ${item.descripcion}` : ''}
                                   </p>
 
-                                  {item.cubierto ? (
-                                    <div className="text-[11px] text-emerald-300 font-medium">
-                                      ✓ En stock: {item.stockDetalle}
-                                    </div>
-                                  ) : (
-                                    <div className="text-[11px] text-red-300 font-medium">
-                                      ⚠️ Falta en el botiquín
-                                    </div>
-                                  )}
+                                  <div className="text-xs">
+                                    {item.cubierto ? (
+                                      <span className="text-zinc-400">
+                                        En botiquín:{' '}
+                                        <strong className="text-zinc-200 font-medium">
+                                          {item.stockDetalle}
+                                        </strong>
+                                      </span>
+                                    ) : (
+                                      <span className="text-rose-400/90 font-medium">
+                                        Falta en botiquín
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-1.5 shrink-0">
+                              <div className="flex items-center gap-2 shrink-0">
                                 <span
-                                  className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${
+                                  className={`rounded-lg px-2.5 py-1 text-xs font-medium ${
                                     isPacked
-                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                      ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
                                       : item.cubierto
-                                      ? 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                                      : 'bg-primary/15 text-primary border border-primary/40'
+                                      ? 'bg-zinc-800/80 text-zinc-300 border border-zinc-700'
+                                      : 'bg-zinc-800/50 text-rose-300 border border-rose-500/30'
                                   }`}
                                 >
-                                  {isPacked ? '✓ En valija' : item.cubierto ? 'En stock' : 'Falta'}
+                                  {isPacked ? 'En valija' : item.cubierto ? 'En stock' : 'Falta'}
                                 </span>
 
                                 {!item.cubierto && (
