@@ -121,6 +121,24 @@ function formatMesAnio(fecha: string | null | undefined): string {
   return fecha
 }
 
+function toProperCase(str: string | null | undefined): string {
+  if (!str) return ''
+  return str
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .map((word) => {
+      if (!word) return ''
+      return word.charAt(0).toUpperCase() + word.slice(1)
+    })
+    .join(' ')
+}
+
+function formatProperEspacio(texto: string | null | undefined): string {
+  if (!texto) return ''
+  return formatEspacioMedida(toProperCase(texto))
+}
+
 function formatEspacioMedida(texto: string | null | undefined): string {
   if (!texto) return ''
   return texto.replace(/(\d+(?:[.,]\d+)?)\s*(mg|ml|g|mcg|ug|ui|l|kg|cm3|cc)\b/gi, '$1 $2')
@@ -455,6 +473,7 @@ export default function BotiquinAppClient({
   const [nuevoItemViajeNombre, setNuevoItemViajeNombre] = useState('')
   const [nuevoItemViajeDroga, setNuevoItemViajeDroga] = useState('')
   const [nuevoItemViajeParaQue, setNuevoItemViajeParaQue] = useState('')
+  const [selectedViajeModalItem, setSelectedViajeModalItem] = useState<any | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -898,6 +917,7 @@ export default function BotiquinAppClient({
             .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
             .join(', '),
           medicamentosQueCubren,
+          marcas: formatMarcasSugeridas(esc),
         }
       })
 
@@ -925,6 +945,7 @@ export default function BotiquinAppClient({
             .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
             .join(', '),
           medicamentosQueCubren: matches,
+          marcas: (extra.keywords || []).filter((k) => k.length > 2).map((k) => k.charAt(0).toUpperCase() + k.slice(1)).join(', '),
         }
       })
 
@@ -949,6 +970,7 @@ export default function BotiquinAppClient({
           .map((m) => `${formatEspacioMedida(m.nombre)} (${m.cantidad_actual} ${m.unidad})`)
           .join(', '),
         medicamentosQueCubren: matches,
+        marcas: '',
       }
     })
 
@@ -1395,8 +1417,8 @@ export default function BotiquinAppClient({
           medicamento: {
             ...(editingMed ? { id: editingMed.id } : {}),
             ...medForm,
-            nombre: formatEspacioMedida(medForm.nombre.trim()),
-            droga: formatEspacioMedida(medForm.droga.trim()),
+            nombre: formatProperEspacio(medForm.nombre.trim()),
+            droga: formatProperEspacio(medForm.droga.trim()),
             concentracion: formatEspacioMedida(medForm.concentracion.trim()),
           },
         }),
@@ -2240,16 +2262,16 @@ export default function BotiquinAppClient({
             ) : (
               <div className="space-y-4">
                 {/* DESKTOP TABLE VIEW */}
-                <div className="hidden md:block rounded-2xl border border-[#2c3240] bg-[#141720] shadow-sm">
+                <div className="hidden md:block rounded-2xl border border-[#2c3240] bg-[#141720] shadow-sm overflow-hidden">
                   <table className="w-full table-fixed text-left border-collapse">
                     <thead>
                       <tr className="border-b border-[#252b38] bg-[#10131a] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        <th className="w-[7%] py-3 pl-4 pr-1 text-center">Foto</th>
-                        <th className="w-[30%] py-3 px-3">Medicamento</th>
-                        <th className="w-[18%] py-3 px-2">Categoría & Público</th>
-                        <th className="w-[15%] py-3 px-2 text-center">Stock</th>
+                        <th className="w-[6%] py-3 pl-4 pr-1 text-center rounded-tl-2xl">Foto</th>
+                        <th className="w-[23%] py-3 px-3">Medicamento</th>
+                        <th className="w-[23%] py-3 px-2">Categoría</th>
+                        <th className="w-[11%] py-3 px-2 text-center">Stock</th>
                         <th className="w-[12%] py-3 px-2 text-center">Vencimiento</th>
-                        <th className="w-[18%] py-3 pl-2 pr-4 text-right">Acciones</th>
+                        <th className="w-[25%] py-3 pl-2 pr-4 text-right rounded-tr-2xl">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#212633] text-xs">
@@ -2322,100 +2344,62 @@ export default function BotiquinAppClient({
                               )}
                             </td>
 
-                            {/* 2. Medicamento */}
+                            {/* 2. Medicamento (Proper Case) */}
                             <td className="py-2.5 px-3 align-middle">
                               <div className="font-semibold text-zinc-100 text-sm leading-snug truncate" title={med.nombre}>
-                                {formatEspacioMedida(med.nombre)}
+                                {formatProperEspacio(med.nombre)}
                               </div>
                               <div className="text-xs text-muted-foreground truncate mt-0.5" title={med.droga}>
-                                {formatEspacioMedida(med.droga) || 'Sin especificar'}
+                                {formatProperEspacio(med.droga) || 'Sin especificar'}
                                 {med.concentracion ? ` • ${formatEspacioMedida(med.concentracion)}` : ''}
                               </div>
                             </td>
 
-                            {/* 3. Categoría & Público */}
+                            {/* 3. Categoría (Always Gray Público Tag) */}
                             <td className="py-2.5 px-2 align-middle">
                               <div className="flex flex-col gap-1 items-start">
-                                <span className="inline-block rounded-md bg-[#202532] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[150px]">
+                                <span className="inline-block rounded-md bg-[#202532] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[170px]">
                                   {med.categoria}
                                 </span>
-                                {med.publico === 'pediatrico' ? (
-                                  <span className="inline-flex items-center space-x-1 rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300 border border-sky-500/20">
-                                    <Baby className="h-2.5 w-2.5" />
-                                    <span>Pediátrico</span>
-                                  </span>
-                                ) : med.publico === 'adulto' ? (
-                                  <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800/90 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 border border-zinc-700">
-                                    <User className="h-2.5 w-2.5" />
-                                    <span>Adultos</span>
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800/60 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 border border-zinc-700/60">
-                                    <Users className="h-2.5 w-2.5" />
-                                    <span>Ambos</span>
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-
-                            {/* 4. Stock */}
-                            <td className="py-2.5 px-2 text-center align-middle">
-                              <div className="font-semibold text-xs">
-                                <span
-                                  className={
-                                    sinStock
-                                      ? 'text-red-400'
-                                      : med.cantidad_actual <= med.stock_minimo
-                                      ? 'text-amber-400'
-                                      : 'text-zinc-200'
-                                  }
-                                >
-                                  {med.cantidad_actual} {med.unidad}
+                                <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700/60 px-1.5 py-0.5 text-[10px] font-medium">
+                                  <span>{med.publico === 'pediatrico' ? 'Pediátrico' : med.publico === 'adulto' ? 'Adultos' : 'Ambos'}</span>
                                 </span>
-                                {med.cantidad_inicial > 0 && (
-                                  <span className="text-muted-foreground font-normal text-[11px]">
-                                    {' '}/ {med.cantidad_inicial}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="mt-1 flex items-center justify-center gap-1.5">
-                                <div className="h-1.5 w-16 rounded-full bg-[#0e1016] border border-[#2b303d] overflow-hidden">
-                                  <div
-                                    className={`h-full ${
-                                      sinStock
-                                        ? 'bg-red-500'
-                                        : med.cantidad_actual <= med.stock_minimo
-                                        ? 'bg-amber-400'
-                                        : 'bg-emerald-500'
-                                    }`}
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                </div>
-                                <span className="text-[10px] text-muted-foreground">{pct}%</span>
                               </div>
                             </td>
 
-                            {/* 5. Vencimiento */}
+                            {/* 4. Stock (% only, badge if < 33%) */}
+                            <td className="py-2.5 px-2 text-center align-middle">
+                              {sinStock ? (
+                                <span className="inline-block rounded-md px-2 py-0.5 text-xs font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                                  0%
+                                </span>
+                              ) : pct < 33 ? (
+                                <span className="inline-block rounded-md px-2 py-0.5 text-xs font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                  {pct}%
+                                </span>
+                              ) : (
+                                <span className="text-zinc-300 text-xs font-medium">
+                                  {pct}%
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 5. Vencimiento (Menos llamativo, texto un punto más pequeño, sin negrita) */}
                             <td className="py-2.5 px-2 text-center align-middle">
                               <span
-                                className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${
+                                className={`inline-block text-[11px] font-normal ${
                                   vencido
-                                    ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                    ? 'text-red-400'
                                     : proximo
-                                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                                    : 'text-zinc-300'
+                                    ? 'text-amber-400'
+                                    : 'text-zinc-400'
                                 }`}
                               >
                                 {formatMesAnio(med.fecha_vencimiento)}
                               </span>
-                              {vencido ? (
-                                <span className="block text-[10px] text-red-400 mt-0.5">Vencido</span>
-                              ) : proximo ? (
-                                <span className="block text-[10px] text-amber-400 mt-0.5">Próx. a vencer</span>
-                              ) : null}
                             </td>
 
-                            {/* 6. Acciones */}
+                            {/* 6. Acciones (- y + con mismo tamaño que editar, caben en 1 sola línea) */}
                             <td className="py-2.5 pl-2 pr-4 text-right align-middle">
                               {med.estado === 'activo' ? (
                                 <div className="flex items-center justify-end gap-1">
@@ -2550,7 +2534,7 @@ export default function BotiquinAppClient({
                                       )
                                     }}
                                     title="Descontar dosis"
-                                    className={`h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold disabled:opacity-40 ${greyBtn}`}
+                                    className={`p-1.5 h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold leading-none disabled:opacity-40 ${greyBtn}`}
                                   >
                                     -
                                   </button>
@@ -2564,7 +2548,7 @@ export default function BotiquinAppClient({
                                       setReponerVencimiento(med.fecha_vencimiento || '')
                                     }}
                                     title="Reponer Stock"
-                                    className={`h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold ${greyBtn}`}
+                                    className={`p-1.5 h-7 w-7 flex items-center justify-center rounded-lg text-xs font-bold leading-none ${greyBtn}`}
                                   >
                                     +
                                   </button>
@@ -2574,7 +2558,7 @@ export default function BotiquinAppClient({
                                     type="button"
                                     onClick={() => openEditMedModal(med)}
                                     title="Editar"
-                                    className={`p-1.5 rounded-lg ${greyBtn}`}
+                                    className={`p-1.5 h-7 w-7 flex items-center justify-center rounded-lg ${greyBtn}`}
                                   >
                                     <Edit3 className="h-3.5 w-3.5" />
                                   </button>
@@ -2588,7 +2572,7 @@ export default function BotiquinAppClient({
                                       setBajaDetalle('')
                                     }}
                                     title="Eliminar / Dar de baja"
-                                    className={`p-1.5 rounded-lg text-zinc-400 hover:text-red-300 ${greyBtn}`}
+                                    className={`p-1.5 h-7 w-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-300 ${greyBtn}`}
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>
@@ -3338,7 +3322,7 @@ export default function BotiquinAppClient({
                       }`}
                     >
                       <Sun className="h-3.5 w-3.5" />
-                      <span>Clima y Viajeros</span>
+                      <span>Destino</span>
                     </button>
 
                     <button
@@ -3564,138 +3548,60 @@ export default function BotiquinAppClient({
                     }
 
                     return (
-                      <div className="space-y-2.5">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2.5">
                         {itemsFiltrados.map((item) => {
                           const isPacked = packedViajeIds.includes(item.id)
                           return (
                             <div
                               key={item.id}
-                              className={`rounded-2xl border p-4 transition-all flex items-start justify-between gap-3.5 ${
+                              onClick={() => setSelectedViajeModalItem(item)}
+                              className={`group relative flex flex-col justify-between p-3 rounded-xl border text-left cursor-pointer transition-all aspect-square select-none overflow-hidden ${
                                 isPacked
-                                  ? 'border-[#222733] bg-[#111319] opacity-60'
-                                  : 'border-[#282e3b] bg-[#151822] hover:border-[#384050]'
+                                  ? 'border-[#222735] bg-[#101217]/90 opacity-60 hover:opacity-85'
+                                  : 'border-[#2f3545] bg-[#161922] hover:border-zinc-400 hover:bg-[#1c202c] shadow-sm'
                               }`}
                             >
-                              <div className="flex items-start gap-3 min-w-0 flex-1">
+                              {/* Top Bar: Checkbox + Stock Tag */}
+                              <div className="flex items-center justify-between gap-1 w-full">
                                 <input
                                   type="checkbox"
                                   checked={isPacked}
-                                  onChange={() => togglePackedViajeItem(item.id)}
+                                  onChange={(e) => {
+                                    e.stopPropagation()
+                                    togglePackedViajeItem(item.id)
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
                                   title="Marcar como guardado en la valija"
-                                  className="mt-0.5 h-4 w-4 rounded border-[#4a5264] accent-emerald-500 cursor-pointer shrink-0"
+                                  className="h-4 w-4 rounded border-[#4a5264] accent-emerald-500 cursor-pointer shrink-0"
                                 />
-                                <div className="min-w-0 flex-1 space-y-1.5">
-                                  <div className="flex items-center flex-wrap gap-2">
-                                    <span
-                                      className={`text-sm font-semibold ${
-                                        isPacked
-                                          ? 'line-through text-muted-foreground'
-                                          : 'text-zinc-100'
-                                      }`}
-                                    >
-                                      {item.nombre}
-                                    </span>
-                                    {item.publico === 'pediatrico' ? (
-                                      <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300 font-medium border border-sky-500/20">
-                                        Pediátrico
-                                      </span>
-                                    ) : item.publico === 'adulto' ? (
-                                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300 font-medium border border-zinc-700">
-                                        Adultos
-                                      </span>
-                                    ) : item.publico === 'ambos' ? (
-                                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400 font-medium border border-zinc-700/60">
-                                        Familia
-                                      </span>
-                                    ) : null}
-
-                                    {item.origen === 'viaje' && (
-                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
-                                        Viaje
-                                      </span>
-                                    )}
-                                    {item.origen === 'esencial' && (
-                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
-                                        Esencial
-                                      </span>
-                                    )}
-                                    {item.origen === 'personalizado' && (
-                                      <span className="rounded bg-zinc-800/80 border border-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
-                                        Personalizado
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <p className="text-xs text-muted-foreground leading-snug">
-                                    <strong className="text-zinc-300 font-medium">{item.droga}</strong>
-                                    {item.descripcion ? ` • ${item.descripcion}` : ''}
-                                  </p>
-
-                                  <div className="text-xs">
-                                    {item.cubierto ? (
-                                      <span className="text-zinc-400">
-                                        En botiquín:{' '}
-                                        <strong className="text-zinc-200 font-medium">
-                                          {item.stockDetalle}
-                                        </strong>
-                                      </span>
-                                    ) : (
-                                      <span className="text-rose-400/90 font-medium">
-                                        Falta en botiquín
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
                                 <span
-                                  className={`rounded-lg px-2.5 py-1 text-xs font-medium ${
-                                    isPacked
-                                      ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
-                                      : item.cubierto
-                                      ? 'bg-zinc-800/80 text-zinc-300 border border-zinc-700'
-                                      : 'bg-zinc-800/50 text-rose-300 border border-rose-500/30'
+                                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                                    item.cubierto
+                                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                      : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
                                   }`}
                                 >
-                                  {isPacked ? 'En valija' : item.cubierto ? 'En stock' : 'Falta'}
+                                  {item.cubierto ? 'En stock' : 'Faltante'}
                                 </span>
+                              </div>
 
-                                {!item.cubierto && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      openNewMedModal({
-                                        nombre: item.nombre,
-                                        droga: item.droga,
-                                        publico: item.publico,
-                                      })
-                                    }
-                                    title="Cargar en Stock"
-                                    className={`p-1.5 rounded-lg ${greyBtn}`}
-                                  >
-                                    <Plus className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
+                              {/* Center: Categoría */}
+                              <div className="my-auto py-1">
+                                <p
+                                  className={`text-xs font-semibold leading-snug line-clamp-3 ${
+                                    isPacked ? 'line-through text-zinc-400' : 'text-zinc-100 group-hover:text-white'
+                                  }`}
+                                  title={item.nombre}
+                                >
+                                  {item.nombre}
+                                </p>
+                              </div>
 
-                                {item.origen === 'personalizado' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const customId = item.id.replace('custom:', '')
-                                      updateViajeConfig((prev) => ({
-                                        ...prev,
-                                        itemsPersonalizados: (prev.itemsPersonalizados || []).filter(
-                                          (x) => x.id !== customId
-                                        ),
-                                      }))
-                                      setPackedViajeIds((prev) => prev.filter((x) => x !== item.id))
-                                    }}
-                                    title="Eliminar ítem personalizado"
-                                    className="p-1.5 rounded-lg text-zinc-400 hover:text-red-300 transition-colors"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
+                              {/* Bottom: Principal activo / check */}
+                              <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/60 w-full overflow-hidden">
+                                <span className="truncate pr-1">{item.droga}</span>
+                                {isPacked && (
+                                  <span className="text-emerald-400 font-bold shrink-0">✓</span>
                                 )}
                               </div>
                             </div>
@@ -3779,9 +3685,6 @@ export default function BotiquinAppClient({
                         Entorno y Clima del Viaje
                       </h3>
                     </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      Podés elegir más de uno
-                    </span>
                   </div>
 
                   <p className="text-xs text-muted-foreground">
@@ -5935,6 +5838,156 @@ export default function BotiquinAppClient({
       )}
 
 
+
+      {/* ===================================================================== */}
+      {/* MODAL: DETALLE DE ÍTEM DE VALIJA DE VIAJE                              */}
+      {/* ===================================================================== */}
+      {selectedViajeModalItem && (
+        <div
+          onClick={() => setSelectedViajeModalItem(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[#323846] bg-[#161922] p-6 shadow-2xl space-y-4"
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#2c313f]">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                    Detalle de Viaje
+                  </span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      selectedViajeModalItem.cubierto
+                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                    }`}
+                  >
+                    {selectedViajeModalItem.cubierto ? 'En stock' : 'Faltante'}
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-foreground">
+                  {selectedViajeModalItem.nombre}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedViajeModalItem(null)}
+                className="rounded-lg p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Info Body */}
+            <div className="space-y-3.5 text-xs">
+              <div>
+                <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
+                  Categoría
+                </span>
+                <p className="text-zinc-100 font-semibold">{selectedViajeModalItem.nombre}</p>
+              </div>
+
+              <div>
+                <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
+                  Principal Activo / Droga
+                </span>
+                <p className="text-zinc-200 font-medium">
+                  {selectedViajeModalItem.droga || 'No especificado'}
+                </p>
+              </div>
+
+              <div>
+                <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
+                  Función / Síntomas
+                </span>
+                <p className="text-zinc-300 leading-relaxed">
+                  {selectedViajeModalItem.descripcion || 'Alivio de síntomas y cuidados durante el viaje.'}
+                </p>
+              </div>
+
+              <div>
+                <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
+                  Stock Disponible
+                </span>
+                {selectedViajeModalItem.cubierto ? (
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 font-medium">
+                    ✓ En botiquín: {selectedViajeModalItem.stockDetalle}
+                  </div>
+                ) : (
+                  <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/25 text-rose-300 font-medium">
+                    ✕ Sin stock disponible en botiquín
+                  </div>
+                )}
+              </div>
+
+              {/* Marcas a comprar: solo si NO tengo stock */}
+              {!selectedViajeModalItem.cubierto && (
+                <div>
+                  <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
+                    Marcas a comprar en farmacia
+                  </span>
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200 font-medium">
+                    🛒 {selectedViajeModalItem.marcas || 'Consultar con farmacéutico según la droga sugerida'}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Actions Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#2c313f]">
+              <button
+                type="button"
+                onClick={() => {
+                  togglePackedViajeItem(selectedViajeModalItem.id)
+                }}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
+                  packedViajeIds.includes(selectedViajeModalItem.id)
+                    ? 'bg-emerald-600/30 border border-emerald-500/50 text-emerald-300'
+                    : greyBtn
+                }`}
+              >
+                <CheckSquare className="h-4 w-4" />
+                <span>
+                  {packedViajeIds.includes(selectedViajeModalItem.id)
+                    ? 'En valija (Desmarcar)'
+                    : 'Marcar en valija'}
+                </span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                {!selectedViajeModalItem.cubierto && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const itemToLoad = selectedViajeModalItem
+                      setSelectedViajeModalItem(null)
+                      openNewMedModal({
+                        nombre: itemToLoad.nombre,
+                        droga: itemToLoad.droga,
+                        publico: itemToLoad.publico,
+                      })
+                    }}
+                    className="flex items-center space-x-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Cargar en Stock</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedViajeModalItem(null)}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* MODAL: LISTA DE COMPRAS DE FARMACIA EN 1 CLIC (WHATSAPP)              */}
