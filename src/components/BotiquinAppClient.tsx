@@ -499,6 +499,77 @@ export default function BotiquinAppClient({
     })
   }
 
+  // Global ESC key listener to close any active modal / popup
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        if (selectedViajeModalItem) {
+          setSelectedViajeModalItem(null)
+          return
+        }
+        if (shoppingModalOpen) {
+          setShoppingModalOpen(false)
+          return
+        }
+        if (lightboxPhotos.length > 0) {
+          setLightboxPhotos([])
+          return
+        }
+        if (activeCardTooltip) {
+          setActiveCardTooltip(null)
+          return
+        }
+        if (dosisModalMed) {
+          setDosisModalMed(null)
+          return
+        }
+        if (reponerModalMed) {
+          setReponerModalMed(null)
+          return
+        }
+        if (bajaModalMed) {
+          setBajaModalMed(null)
+          return
+        }
+        if (medModalOpen) {
+          setMedModalOpen(false)
+          return
+        }
+        if (familiarModalOpen) {
+          setFamiliarModalOpen(false)
+          return
+        }
+        if (esencialModalOpen) {
+          setEsencialModalOpen(false)
+          return
+        }
+        if (mostrarFormNuevoItemViaje) {
+          setMostrarFormNuevoItemViaje(false)
+          return
+        }
+        if (mobileMenuOpen) {
+          setMobileMenuOpen(false)
+          return
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    selectedViajeModalItem,
+    shoppingModalOpen,
+    lightboxPhotos,
+    activeCardTooltip,
+    dosisModalMed,
+    reponerModalMed,
+    bajaModalMed,
+    medModalOpen,
+    familiarModalOpen,
+    esencialModalOpen,
+    mostrarFormNuevoItemViaje,
+    mobileMenuOpen,
+  ])
+
   // Register Service Worker & listen for PWA beforeinstallprompt
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1061,9 +1132,16 @@ export default function BotiquinAppClient({
     // Usamos api.whatsapp.com/send/?text= directamente para evitar el bug del acortador wa.me,
     // el cual en su redirección HTTP 302 corrompe los emojis UTF-8 de 4 bytes convirtiéndolos en  (\uFFFD)
     const url = `https://api.whatsapp.com/send/?text=${encodeURIComponent(text)}`
-    const win = window.open(url, '_blank', 'noopener,noreferrer')
-    if (!win) {
-      window.location.href = url
+    try {
+      const a = document.createElement('a')
+      a.href = url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    } catch {
+      window.open(url, '_blank', 'noopener,noreferrer')
     }
   }
 
@@ -2099,7 +2177,7 @@ export default function BotiquinAppClient({
               }`}
             >
               <Plane className="h-4 w-4" />
-              <span>Botiquín de Viaje</span>
+              <span>Viaje</span>
             </a>
 
             <a
@@ -2267,11 +2345,12 @@ export default function BotiquinAppClient({
                     <thead>
                       <tr className="border-b border-[#252b38] bg-[#10131a] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         <th className="w-[6%] py-3 pl-4 pr-1 text-center rounded-tl-2xl">Foto</th>
-                        <th className="w-[23%] py-3 px-3">Medicamento</th>
-                        <th className="w-[23%] py-3 px-2">Categoría</th>
-                        <th className="w-[11%] py-3 px-2 text-center">Stock</th>
-                        <th className="w-[12%] py-3 px-2 text-center">Vencimiento</th>
-                        <th className="w-[25%] py-3 pl-2 pr-4 text-right rounded-tr-2xl">Acciones</th>
+                        <th className="w-[21%] py-3 px-3">Medicamento</th>
+                        <th className="w-[26%] py-3 px-2">Categoría</th>
+                        <th className="w-[8%] py-3 px-2 text-center">Stock</th>
+                        <th className="w-[10%] py-3 px-2 text-center">Vencimiento</th>
+                        <th className="w-[14%] py-3 px-2 text-center">INFO</th>
+                        <th className="w-[15%] py-3 pl-2 pr-4 text-right rounded-tr-2xl">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#212633] text-xs">
@@ -2355,10 +2434,13 @@ export default function BotiquinAppClient({
                               </div>
                             </td>
 
-                            {/* 3. Categoría (Always Gray Público Tag) */}
+                            {/* 3. Categoría (Wider + tooltip on hover) */}
                             <td className="py-2.5 px-2 align-middle">
                               <div className="flex flex-col gap-1 items-start">
-                                <span className="inline-block rounded-md bg-[#202532] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-[170px]">
+                                <span 
+                                  className="inline-block rounded-md bg-[#202532] px-2 py-0.5 text-[11px] text-zinc-300 truncate max-w-full cursor-help"
+                                  title={med.categoria}
+                                >
                                   {med.categoria}
                                 </span>
                                 <span className="inline-flex items-center space-x-1 rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700/60 px-1.5 py-0.5 text-[10px] font-medium">
@@ -2399,10 +2481,10 @@ export default function BotiquinAppClient({
                               </span>
                             </td>
 
-                            {/* 6. Acciones (- y + con mismo tamaño que editar, caben en 1 sola línea) */}
-                            <td className="py-2.5 pl-2 pr-4 text-right align-middle">
+                            {/* 6. INFO (Función y Dosis) */}
+                            <td className="py-2.5 px-2 text-center align-middle">
                               {med.estado === 'activo' ? (
-                                <div className="flex items-center justify-end gap-1">
+                                <div className="flex items-center justify-center gap-1.5">
                                   {/* Función */}
                                   <div className="relative inline-block">
                                     <button
@@ -2424,7 +2506,7 @@ export default function BotiquinAppClient({
                                     {isFuncionOpen && (
                                       <div
                                         onClick={(e) => e.stopPropagation()}
-                                        className="absolute right-0 bottom-full mb-1.5 z-50 w-64 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
+                                        className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 z-50 w-64 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
                                       >
                                         <strong className="text-zinc-300 block mb-0.5">Función:</strong>
                                         {med.para_que_sirve || sintomasResumidos || 'Sin especificar'}
@@ -2453,7 +2535,7 @@ export default function BotiquinAppClient({
                                     {isDosisOpen && (
                                       <div
                                         onClick={(e) => e.stopPropagation()}
-                                        className="absolute right-0 bottom-full mb-1.5 z-50 w-72 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
+                                        className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 z-50 w-72 rounded-lg border border-[#4a5264] bg-[#1e222d] px-3 py-2 text-xs font-normal text-left text-zinc-100 shadow-2xl whitespace-normal break-words leading-relaxed"
                                       >
                                         <strong className="text-sky-300 block mb-0.5">Dosis:</strong>
                                         <span>{med.posologia_referencia || 'Sin especificar'}</span>
@@ -2518,7 +2600,14 @@ export default function BotiquinAppClient({
                                       </div>
                                     )}
                                   </div>
+                                </div>
+                              ) : null}
+                            </td>
 
+                            {/* 7. Acciones (- y + con mismo tamaño que editar, caben en 1 sola línea) */}
+                            <td className="py-2.5 pl-2 pr-4 text-right align-middle">
+                              {med.estado === 'activo' ? (
+                                <div className="flex items-center justify-end gap-1">
                                   {/* - */}
                                   <button
                                     type="button"
@@ -3283,7 +3372,7 @@ export default function BotiquinAppClient({
               </div>
               <div className="min-w-0 flex-1">
                 <h2 className="text-base sm:text-lg font-bold text-foreground tracking-tight">
-                  Botiquín de Viaje / Vacaciones
+                  Viaje
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5 truncate sm:whitespace-normal">
                   Prepará tu bolso de medicamentos sin estrés. Tus ítems marcados se guardan automáticamente.
@@ -3343,20 +3432,18 @@ export default function BotiquinAppClient({
                       type="button"
                       onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Lista del viaje copiada al portapapeles.')}
                       title="Copiar lista del viaje al portapapeles"
-                      className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                      className={`p-2 rounded-lg text-zinc-300 transition-colors ${greyBtn}`}
                     >
-                      <Copy className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">Copiar</span>
+                      <Copy className="h-4 w-4" />
                     </button>
 
                     <button
                       type="button"
                       onClick={() => openWhatsApp(buildViajeWhatsAppText())}
                       title="Compartir lista del viaje por WhatsApp"
-                      className="flex items-center space-x-1 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-2.5 py-1.5 text-xs font-semibold transition-colors"
+                      className={`p-2 rounded-lg text-zinc-300 transition-colors ${greyBtn}`}
                     >
-                      <Share2 className="h-3.5 w-3.5" />
-                      <span>WhatsApp</span>
+                      <Share2 className="h-4 w-4" />
                     </button>
 
                     <button
@@ -3366,10 +3453,9 @@ export default function BotiquinAppClient({
                         setShoppingModalOpen(true)
                       }}
                       title="Lista de Compras de Farmacia"
-                      className={`flex items-center space-x-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold ${greyBtn}`}
+                      className={`p-2 rounded-lg text-zinc-300 transition-colors ${greyBtn}`}
                     >
-                      <ShoppingBag className="h-3.5 w-3.5 text-primary" />
-                      <span>Compras</span>
+                      <ShoppingBag className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -3574,19 +3660,15 @@ export default function BotiquinAppClient({
                                   title="Marcar como guardado en la valija"
                                   className="h-4 w-4 rounded border-[#4a5264] accent-emerald-500 cursor-pointer shrink-0"
                                 />
-                                <span
-                                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${
-                                    item.cubierto
-                                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                                      : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                                  }`}
-                                >
-                                  {item.cubierto ? 'En stock' : 'Faltante'}
-                                </span>
+                                {!item.cubierto && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                                    Faltante
+                                  </span>
+                                )}
                               </div>
 
-                              {/* Center: Categoría */}
-                              <div className="my-auto py-1">
+                              {/* Center: Categoría (alineación superior) */}
+                              <div className="pt-2 pb-1 flex-1 flex flex-col justify-start">
                                 <p
                                   className={`text-xs font-semibold leading-snug line-clamp-3 ${
                                     isPacked ? 'line-through text-zinc-400' : 'text-zinc-100 group-hover:text-white'
@@ -3597,12 +3679,9 @@ export default function BotiquinAppClient({
                                 </p>
                               </div>
 
-                              {/* Bottom: Principal activo / check */}
+                              {/* Bottom: Principal activo */}
                               <div className="flex items-center justify-between text-[10px] text-zinc-400 pt-1 border-t border-zinc-800/60 w-full overflow-hidden">
-                                <span className="truncate pr-1">{item.droga}</span>
-                                {isPacked && (
-                                  <span className="text-emerald-400 font-bold shrink-0">✓</span>
-                                )}
+                                <span className="truncate">{item.droga}</span>
                               </div>
                             </div>
                           )
@@ -3634,38 +3713,6 @@ export default function BotiquinAppClient({
                     >
                       Reiniciar valija
                     </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Lista del viaje copiada al portapapeles.')}
-                        className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                        <span>Copiar</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => openWhatsApp(buildViajeWhatsAppText())}
-                        className="flex items-center space-x-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-3.5 py-1.5 text-xs font-semibold transition-colors"
-                      >
-                        <Share2 className="h-3.5 w-3.5" />
-                        <span>Compartir por WhatsApp</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIncludeViajeInShopping(true)
-                          setShoppingModalOpen(true)
-                        }}
-                        className={`flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${greyBtn}`}
-                      >
-                        <ShoppingBag className="h-3.5 w-3.5 text-primary" />
-                        <span>Ver en Compras</span>
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -3860,24 +3907,6 @@ export default function BotiquinAppClient({
                   <span className="text-[11px] text-muted-foreground">
                     Las notas se incluirán automáticamente al compartir el checklist por WhatsApp.
                   </span>
-                  <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(buildViajeWhatsAppText(), 'Checklist y notas copiadas al portapapeles.')}
-                      className={`flex items-center space-x-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      <span>Copiar</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openWhatsApp(buildViajeWhatsAppText())}
-                      className="flex items-center space-x-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30 px-3.5 py-1.5 text-xs font-semibold transition-colors"
-                    >
-                      <Share2 className="h-3.5 w-3.5" />
-                      <span>Compartir Notas por WhatsApp</span>
-                    </button>
-                  </div>
                 </div>
               </div>
             )}
@@ -5885,13 +5914,6 @@ export default function BotiquinAppClient({
             <div className="space-y-3.5 text-xs">
               <div>
                 <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
-                  Categoría
-                </span>
-                <p className="text-zinc-100 font-semibold">{selectedViajeModalItem.nombre}</p>
-              </div>
-
-              <div>
-                <span className="text-muted-foreground block text-[11px] font-medium mb-0.5">
                   Principal Activo / Droga
                 </span>
                 <p className="text-zinc-200 font-medium">
@@ -5970,7 +5992,7 @@ export default function BotiquinAppClient({
                         publico: itemToLoad.publico,
                       })
                     }}
-                    className="flex items-center space-x-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors"
+                    className={`flex items-center space-x-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${greyBtn}`}
                   >
                     <Plus className="h-3.5 w-3.5" />
                     <span>Cargar en Stock</span>
