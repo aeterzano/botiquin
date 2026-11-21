@@ -64,12 +64,6 @@ export default async function LoginPage({
           </div>
           <div className="pt-4 flex flex-col space-y-3">
             <SubmitButton label="Ingresar" />
-            <a
-              href="/registro"
-              className="w-full text-center rounded-lg border border-zinc-600/80 bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-700 transition-colors"
-            >
-              Registro
-            </a>
           </div>
         </form>
       </div>
